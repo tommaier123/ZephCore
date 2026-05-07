@@ -31,6 +31,7 @@ Other benefits:
 | **Ikoka Nano 30dBm** | SX1262 (E22-900M30S, 30 dBm PA) | RGB LEDs |
 | **SenseCAP Solar** | SX1262 | GPS (L76K), QSPI flash, battery monitor |
 | **XIAO nRF52840 + Wio-SX1262** | SX1262 | Bare XIAO + Wio-SX1262 expansion |
+| **ProMicro SX1262** | SX1262 (E22-900M30S) | GPS, battery ADC, button, LED |
 
 ### ESP32
 

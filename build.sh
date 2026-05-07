@@ -18,6 +18,7 @@ nRF_boards=(
     sensecap_solar
     xiao_nrf52840
     lilygo_techo
+    promicro_sx1262
 )
 
 ESP32_boards=(
