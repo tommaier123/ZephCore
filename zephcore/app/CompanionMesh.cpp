@@ -16,9 +16,12 @@
 #include <ZephyrSensorManager.h>
 #include <adapters/sensors/SimpleLPP.h>
 #include <adapters/ble/ZephyrBLE.h>
-#if IS_ENABLED(CONFIG_ZEPHCORE_UI_BUTTONS) || IS_ENABLED(CONFIG_ZEPHCORE_UI_BUZZER) || IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY)
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_BUTTON) || IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
 #include <ui_task.h>
 #define ZEPHCORE_HAS_UI_TASK 1
+#endif
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+#include <joystick_ui_hooks.h>
 #endif
 LOG_MODULE_REGISTER(zephcore_companion, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 
@@ -131,6 +134,16 @@ static inline void put_le16(uint8_t *p, uint16_t v) { p[0] = v & 0xFF; p[1] = (v
 static inline void put_le32(uint8_t *p, uint32_t v) { p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF; }
 static inline uint32_t get_le32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24); }
 
+/* UI notification helper => path_len extraction + uniform call through ui_task.h */
+#if ZEPHCORE_HAS_UI_TASK
+static void notify_contact_msg_ui(
+	const ContactInfo &contact, mesh::Packet *pkt, const char *text, int queue_count
+){
+	uint8_t path_len = (pkt && pkt->isRouteFlood()) ? pkt->path_len : OUT_PATH_UNKNOWN;
+	ui_notify_contact_msg(path_len, contact.name, text, (uint16_t)queue_count);
+}
+#endif
+
 /* Allowed client repeat frequency ranges (matches Arduino) */
 struct FreqRange {
 	uint32_t lower_freq, upper_freq;
@@ -182,6 +195,8 @@ CompanionMesh::CompanionMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mes
 	_pending_telemetry = 0;
 	_pending_discovery = 0;
 	_pending_req = 0;
+	_pending_joystick_ping_tag = 0;
+	_pending_joystick_admin_tag = 0;
 	_pending_channel_head = 0;
 	_pending_channel_tail = 0;
 	_pending_channel_count = 0;
@@ -307,6 +322,16 @@ void CompanionMesh::loop()
 	if (_dirty_channels_expiry && now >= _dirty_channels_expiry) {
 		flushDirtyChannels();
 	}
+}
+
+void CompanionMesh::onLoginSent(const ContactInfo &contact)
+{
+	memcpy(&_pending_login, contact.id.pub_key, 4);
+}
+
+void CompanionMesh::onChannelAdded(ChannelDetails *)
+{
+	markChannelsDirty();
 }
 
 void CompanionMesh::markContactsDirty()
@@ -687,8 +712,7 @@ void CompanionMesh::onMessageRecv(const ContactInfo &contact, mesh::Packet *pkt,
 	queueContactMessage(contact, pkt, TXT_TYPE_PLAIN, sender_timestamp, nullptr, 0, text);
 	sendPush(PUSH_CODE_MSG_WAITING);
 #if ZEPHCORE_HAS_UI_TASK
-	ui_set_msg_count((uint16_t)_offline_queue_count);
-	ui_notify(UI_EVENT_CONTACT_MSG);
+	notify_contact_msg_ui(contact, pkt, text, _offline_queue_count);
 #endif
 }
 
@@ -714,8 +738,7 @@ void CompanionMesh::queueContactMessage(const ContactInfo &contact, mesh::Packet
 	memcpy(&frame[i], contact.id.pub_key, 6);
 	i += 6;
 
-	// path_len: 0xFF if direct, else actual path_len
-	frame[i++] = (pkt && pkt->isRouteFlood()) ? pkt->path_len : 0xFF;
+	frame[i++] = (pkt && pkt->isRouteFlood()) ? pkt->path_len : OUT_PATH_UNKNOWN;
 
 	// txt_type
 	frame[i++] = txt_type;
@@ -751,6 +774,12 @@ void CompanionMesh::onCommandDataRecv(const ContactInfo &contact, mesh::Packet *
 	markConnectionActive(contact);
 	queueContactMessage(contact, pkt, TXT_TYPE_CLI_DATA, sender_timestamp, nullptr, 0, text);
 	sendPush(PUSH_CODE_MSG_WAITING);
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+	{
+		struct ui_joystick_cli_data cli = { text };
+		ui_notify_joystick_event(UI_JOYSTICK_CLI_RESPONSE, contact.id.pub_key, &cli);
+	}
+#endif
 }
 
 void CompanionMesh::onSignedMessageRecv(const ContactInfo &contact, mesh::Packet *pkt,
@@ -765,8 +794,7 @@ void CompanionMesh::onSignedMessageRecv(const ContactInfo &contact, mesh::Packet
 	queueContactMessage(contact, pkt, TXT_TYPE_SIGNED_PLAIN, sender_timestamp, sender_prefix, 4, text);
 	sendPush(PUSH_CODE_MSG_WAITING);
 #if ZEPHCORE_HAS_UI_TASK
-	ui_set_msg_count((uint16_t)_offline_queue_count);
-	ui_notify(UI_EVENT_CONTACT_MSG);
+	notify_contact_msg_ui(contact, pkt, text, _offline_queue_count);
 #endif
 }
 
@@ -809,8 +837,8 @@ void CompanionMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh
 	uint8_t channel_idx = findChannelIdx(channel);
 	frame[i++] = channel_idx;
 
-	// path_len: 0xFF if direct, else actual path_len
-	frame[i++] = (pkt && pkt->isRouteFlood()) ? pkt->path_len : 0xFF;
+	uint8_t path_len = (pkt && pkt->isRouteFlood()) ? pkt->path_len : OUT_PATH_UNKNOWN;
+	frame[i++] = path_len;
 
 	// txt_type
 	frame[i++] = TXT_TYPE_PLAIN;
@@ -831,8 +859,14 @@ void CompanionMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh
 	queueOfflineMessage(frame, i);
 	sendPush(PUSH_CODE_MSG_WAITING);
 #if ZEPHCORE_HAS_UI_TASK
-	ui_set_msg_count((uint16_t)_offline_queue_count);
-	ui_notify(UI_EVENT_CHANNEL_MSG);
+	{
+		ChannelDetails ch;
+		const char *ch_name = "";
+		if (getChannel(channel_idx, ch)) ch_name = ch.name;
+		ui_notify_channel_msg(
+			ch_name, text, timestamp, path_len, (uint16_t)_offline_queue_count
+		);
+	}
 #endif
 }
 
@@ -854,7 +888,7 @@ void CompanionMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::P
 
 	uint8_t channel_idx = findChannelIdx(channel);
 	frame[i++] = channel_idx;
-	frame[i++] = (pkt && pkt->isRouteFlood()) ? pkt->path_len : 0xFF;
+	frame[i++] = (pkt && pkt->isRouteFlood()) ? pkt->path_len : OUT_PATH_UNKNOWN;
 	frame[i++] = (uint8_t)(data_type & 0xFF);
 	frame[i++] = (uint8_t)(data_type >> 8);
 	frame[i++] = (uint8_t)data_len;
@@ -1041,6 +1075,13 @@ uint8_t CompanionMesh::onContactRequest(const ContactInfo &contact, uint32_t sen
 	return 0;  // Unknown request or denied
 }
 
+void CompanionMesh::logTx(mesh::Packet *, int)
+{
+#if ZEPHCORE_HAS_UI_TASK
+	ui_notify_packet_sent();
+#endif
+}
+
 void CompanionMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, uint8_t len)
 {
 	LOG_DBG("onContactResponse: len=%d from contact", len);
@@ -1089,8 +1130,44 @@ void CompanionMesh::onContactResponse(const ContactInfo &contact, const uint8_t 
 			i += 6;
 		}
 		sendPush(rsp[0], &rsp[1], i - 1);
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+		{
+			struct ui_joystick_login_data login = {
+				rsp[0] == PUSH_CODE_LOGIN_SUCCESS,
+				rsp[1],  /* permissions (0 for fail/legacy) */
+				tag,     /* server_time */
+			};
+			ui_notify_joystick_event(UI_JOYSTICK_LOGIN_RESULT, contact.id.pub_key, &login);
+		}
+#endif
 		return;
 	}
+
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+	/* Joystick-originated requests (ping and admin binary): tag-based match takes priority
+	 * over the pubkey-based _pending_status check below.  Without this, a stale
+	 * _pending_status for the same repeater would intercept any response and forward it
+	 * to BLE, causing a joystick timeout. */
+	if ((_pending_joystick_ping_tag  && tag == _pending_joystick_ping_tag) ||
+	    (_pending_joystick_admin_tag && tag == _pending_joystick_admin_tag)) {
+		_pending_joystick_ping_tag  = 0;
+		_pending_joystick_admin_tag = 0;
+		int8_t snr_remote = INT8_MIN;
+		if (len >= 48) {
+			int16_t rs;
+			memcpy(&rs, &data[46], 2);
+			snr_remote = (int8_t)(rs / 4);
+		}
+		struct ui_joystick_req_response_data rr = {
+			(int8_t)_radio->getLastSNR(),
+			snr_remote,
+			len > 4 ? &data[4] : nullptr,
+			(uint8_t)(len > 4 ? len - 4 : 0),
+		};
+		ui_notify_joystick_event(UI_JOYSTICK_REQ_RESPONSE, contact.id.pub_key, &rr);
+		return;
+	}
+#endif
 
 	// Check for status response
 	if (_pending_status && len > 4 && memcmp(&_pending_status, contact.id.pub_key, 4) == 0) {
@@ -1149,6 +1226,27 @@ void CompanionMesh::onContactResponse(const ContactInfo &contact, const uint8_t 
 		sendPush(rsp[0], &rsp[1], i - 1);
 		return;
 	}
+
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+	/* Unmatched response: forward to joystick so it can check for a pending ping.
+	 * RepeaterStats.last_snr sits at byte offset 42 in the struct payload (after the
+	 * 4-byte tag prefix), so data[46].  Only valid when the response is long enough. */
+	{
+		int8_t snr_remote = INT8_MIN;
+		if (len >= 48) {
+			int16_t rs;
+			memcpy(&rs, &data[46], 2);
+			snr_remote = (int8_t)(rs / 4);
+		}
+		struct ui_joystick_req_response_data rr = {
+			(int8_t)_radio->getLastSNR(),
+			snr_remote,
+			len > 4 ? &data[4] : nullptr,
+			(uint8_t)(len > 4 ? len - 4 : 0),
+		};
+		ui_notify_joystick_event(UI_JOYSTICK_REQ_RESPONSE, contact.id.pub_key, &rr);
+	}
+#endif
 }
 
 /* Raw packet logging - sends all RX packets to app for "heard X repeats" etc */
@@ -1206,6 +1304,17 @@ void CompanionMesh::onControlDataRecv(mesh::Packet *packet)
 		LOG_WRN("onControlDataRecv: payload too long (%d)", packet->payload_len);
 		return;
 	}
+
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+	if (packet->payload_len >= 6 + PUB_KEY_SIZE &&
+	    (packet->payload[0] & 0xF0) == CTL_TYPE_NODE_DISCOVER_RESP &&
+	    (packet->payload[0] & 0x0F) == ADV_TYPE_REPEATER) {
+		struct ui_joystick_discover_data dd = {
+			(int8_t)packet->getSNR(), (int8_t)((int8_t)packet->payload[1] / 4), packet->path_len
+		};
+		ui_notify_joystick_event(UI_JOYSTICK_DISCOVER_RESP, &packet->payload[6], &dd);
+	}
+#endif
 
 	uint8_t buf[MAX_FRAME_SIZE];
 	int i = 0;

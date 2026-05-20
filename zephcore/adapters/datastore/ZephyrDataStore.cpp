@@ -493,6 +493,35 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 	} else {
 		memset(prefs.default_scope_key, 0, sizeof(prefs.default_scope_key));
 	}
+
+	/* Offset 143: ble_disabled (ZephCore extension) */
+	if (off < len) {
+		prefs.ble_disabled = buf[off++];
+	} else {
+		prefs.ble_disabled = 0;
+	}
+
+	/* Offset 144: display_brightness (ZephCore extension, 0 = default 100%) */
+	if (off < len) {
+		prefs.display_brightness = buf[off++];
+	} else {
+		prefs.display_brightness = 0;
+	}
+
+	/* Offset 145: wake_on_msg (ZephCore extension, 0 = don't wake, 1 = wake on message) */
+	if (off < len) {
+		prefs.wake_on_msg = buf[off++];
+	} else {
+		prefs.wake_on_msg = 1;
+	}
+
+	/* Offset 146: screen_off_secs (ZephCore extension, 2 bytes LE, 0 = Kconfig default) */
+	if (off + 2 <= len) {
+		prefs.screen_off_secs = (uint16_t)buf[off] | ((uint16_t)buf[off + 1] << 8);
+		off += 2;
+	} else {
+		prefs.screen_off_secs = 0;
+	}
 }
 
 void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
@@ -553,7 +582,16 @@ void ZephyrDataStore::savePrefs(const NodePrefs &prefs)
 	/* Offset 127: default_scope_key (16 bytes) */
 	memcpy(&buf[off], prefs.default_scope_key, 16);
 	off += 16;
-	/* Total: 143 bytes */
+	/* Offset 143: ble_disabled (ZephCore extension) */
+	buf[off++] = prefs.ble_disabled;
+	/* Offset 144: display_brightness (ZephCore extension) */
+	buf[off++] = prefs.display_brightness;
+	/* Offset 145: wake_on_msg (ZephCore extension) */
+	buf[off++] = prefs.wake_on_msg;
+	/* Offset 146: screen_off_secs (ZephCore extension, 2 bytes LE) */
+	buf[off++] = prefs.screen_off_secs & 0xFF;
+	buf[off++] = (prefs.screen_off_secs >> 8) & 0xFF;
+	/* Total: 148 bytes */
 
 	bool ok = atomicReplaceFile(PREFS_FILE, buf, off);
 	LOG_DBG("savePrefs: wrote %s, ok=%d (%d bytes), name='%.16s'",

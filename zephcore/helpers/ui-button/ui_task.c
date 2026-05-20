@@ -60,6 +60,9 @@
 /* Mesh action wrappers (deferred to mesh event loop thread) */
 #include "ui_mesh_actions.h"
 
+/* LED helpers defined in ui_common.c */
+extern void ui_led_flash_msg(void);
+
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ui_task, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
 
@@ -83,39 +86,6 @@ LOG_MODULE_REGISTER(ui_task, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
 #define MELODY_LED_ON     "lon:d=16,o=7,b=200:c,p,c,p,c,p,c,p,c,p,p,8e"
 #define MELODY_LED_OFF    "lof:d=16,o=7,b=200:c,p,c,p,c,p,c,p,c,p,p,8g5"
 
-/* ========== LED Heartbeat ========== */
-/* Match Arduino: 4s cycle, 20ms pulse (normal) or 200ms (unread messages).
- * Uses led0 or led1 alias — whichever exists in the board's DTS.
- * Disabled when OLED display is present (display makes LED redundant). */
-/* Heartbeat LED — subtle pulse every 4s on led0 (or led1 fallback).
- * Works alongside displays; boards that want to disable it can
- * remove the led0 alias or override this with a Kconfig guard. */
-#if DT_NODE_HAS_PROP(DT_ALIAS(led0), gpios)
-static const struct gpio_dt_spec heartbeat_led =
-	GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
-#define HAS_HEARTBEAT_LED 1
-#elif DT_NODE_HAS_PROP(DT_ALIAS(led1), gpios)
-static const struct gpio_dt_spec heartbeat_led =
-	GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
-#define HAS_HEARTBEAT_LED 1
-#else
-#define HAS_HEARTBEAT_LED 0
-#endif
-
-/* Second LED: unread pulse (companion only). Repeaters use led1 for LoRa TX via
- * lora-tx-led alias — no offline queue, so ui_task leaves led1 alone. */
-#if HAS_HEARTBEAT_LED && DT_NODE_HAS_PROP(DT_ALIAS(led0), gpios) && \
-    DT_NODE_HAS_PROP(DT_ALIAS(led1), gpios) && !defined(ZEPHCORE_REPEATER)
-static const struct gpio_dt_spec msg_led =
-	GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
-#define HAS_MSG_LED 1
-#else
-#define HAS_MSG_LED 0
-#endif
-
-#define LED_CYCLE_MS      4000   /* Total heartbeat period */
-#define LED_ON_MS         20     /* Normal pulse width */
-#define LED_ON_MSG_MS     200    /* Pulse width when unread messages */
 
 /* ========== Deep Sleep / System OFF ========== */
 /* On nRF52840, sys_poweroff() = System OFF (~1µA).
@@ -176,51 +146,7 @@ static struct k_work_delayable splash_work;
 /* Deferred zero-hop advert — waits for possible double-press upgrade to flood */
 static struct k_work_delayable advert_defer_work;
 
-/* LED heartbeat only on boards with LED but no OLED (display makes it redundant) */
-#if HAS_HEARTBEAT_LED
-/* LED heartbeat: two one-shot works form a self-rescheduling cycle.
- * led_on_work turns LED on and schedules led_off_work after pulse width.
- * led_off_work turns LED off and schedules led_on_work after remainder. */
-static struct k_work_delayable led_on_work;
-static struct k_work_delayable led_off_work;
-#endif
-
 /* ========== Work Handlers ========== */
-
-#if HAS_HEARTBEAT_LED
-static void led_off_work_handler(struct k_work *work)
-{
-	ARG_UNUSED(work);
-	gpio_pin_set_dt(&heartbeat_led, 0);
-#if HAS_MSG_LED
-	gpio_pin_set_dt(&msg_led, 0);
-#endif
-
-	/* Schedule next ON after remainder of cycle */
-	struct ui_state *s = get_state();
-	uint16_t on_ms = (s->msg_count > 0) ? LED_ON_MSG_MS : LED_ON_MS;
-
-	k_work_reschedule(&led_on_work, K_MSEC(LED_CYCLE_MS - on_ms));
-}
-
-static void led_on_work_handler(struct k_work *work)
-{
-	ARG_UNUSED(work);
-	gpio_pin_set_dt(&heartbeat_led, 1);
-#if HAS_MSG_LED
-	struct ui_state *s = get_state();
-	if (s->msg_count > 0) {
-		gpio_pin_set_dt(&msg_led, 1);
-	}
-	uint16_t on_ms = (s->msg_count > 0) ? LED_ON_MSG_MS : LED_ON_MS;
-#else
-	struct ui_state *s = get_state();
-	uint16_t on_ms = (s->msg_count > 0) ? LED_ON_MSG_MS : LED_ON_MS;
-#endif
-
-	k_work_reschedule(&led_off_work, K_MSEC(on_ms));
-}
-#endif
 
 static void render_work_handler(struct k_work *work)
 {
@@ -360,7 +286,7 @@ static void action_page_enter(void)
 		uint32_t now_og = k_uptime_get_32();
 
 		if (st_og->offgrid_confirm_time != 0 &&
-		    (now_og - st_og->offgrid_confirm_time) <= CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
+			(now_og - st_og->offgrid_confirm_time) <= CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
 			/* Confirmed — toggle offgrid mode */
 			bool new_state = !st_og->offgrid_enabled;
 			st_og->offgrid_enabled = new_state;
@@ -381,7 +307,7 @@ static void action_page_enter(void)
 		uint32_t now_dfu = k_uptime_get_32();
 
 		if (st_dfu->dfu_confirm_time != 0 &&
-		    (now_dfu - st_dfu->dfu_confirm_time) <= CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
+			(now_dfu - st_dfu->dfu_confirm_time) <= CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
 			/* Confirmed — reboot into BLE DFU */
 			action_enter_dfu();
 		} else {
@@ -398,7 +324,7 @@ static void action_page_enter(void)
 		uint32_t now = k_uptime_get_32();
 
 		if (st->shutdown_confirm_time != 0 &&
-		    (now - st->shutdown_confirm_time) <= CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
+			(now - st->shutdown_confirm_time) <= CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
 			/* Confirmed — shut down */
 			action_deep_sleep();
 		} else {
@@ -501,8 +427,7 @@ static void action_leds_toggle(void)
 	struct ui_state *s = get_state();
 	bool new_disabled = !s->leds_disabled;
 
-	s->leds_disabled = new_disabled;
-	ui_set_heartbeat_led(!new_disabled);
+	ui_set_leds_disabled(new_disabled);
 	mesh_set_leds_disabled(new_disabled);
 #ifdef CONFIG_ZEPHCORE_UI_BUZZER
 	buzzer_play(new_disabled ? MELODY_LED_OFF : MELODY_LED_ON);
@@ -571,14 +496,7 @@ static void action_deep_sleep(void)
 	LOG_INF("deep sleep: shutting down...");
 
 	/* 1. Stop LED heartbeat and msg indicator */
-#if HAS_HEARTBEAT_LED
-	k_work_cancel_delayable(&led_on_work);
-	k_work_cancel_delayable(&led_off_work);
-	gpio_pin_set_dt(&heartbeat_led, 0);
-#endif
-#if HAS_MSG_LED
-	gpio_pin_set_dt(&msg_led, 0);
-#endif
+	ui_set_heartbeat_led(false);
 
 	/* 2. Play shutdown melody (blocking wait) */
 #ifdef CONFIG_ZEPHCORE_UI_BUZZER
@@ -652,9 +570,9 @@ static void action_deep_sleep(void)
 			NRF_GPIO_PIN_MAP(_SW0_PORT, _SW0_PIN),
 			(_SW0_FLAGS & GPIO_PULL_UP)   ? NRF_GPIO_PIN_PULLUP   :
 			(_SW0_FLAGS & GPIO_PULL_DOWN) ? NRF_GPIO_PIN_PULLDOWN :
-			                               NRF_GPIO_PIN_NOPULL,
+										   NRF_GPIO_PIN_NOPULL,
 			(_SW0_FLAGS & GPIO_ACTIVE_LOW) ? NRF_GPIO_PIN_SENSE_LOW
-			                               : NRF_GPIO_PIN_SENSE_HIGH);
+										   : NRF_GPIO_PIN_SENSE_HIGH);
 #undef _SW0_NODE
 #undef _SW0_PORT
 #undef _SW0_PIN
@@ -689,7 +607,7 @@ static void ui_input_cb(struct input_event *evt, void *user_data)
 			uint32_t now = k_uptime_get_32();
 
 			if (doom_last_enter != 0 &&
-			    (now - doom_last_enter) <= 500) {
+				(now - doom_last_enter) <= 500) {
 				/* Double-click — exit Doom */
 				doom_last_enter = 0;
 				doom_game_stop();
@@ -871,24 +789,7 @@ int ui_init(void)
 	}
 #endif
 
-	/* Initialize LED heartbeat — only on boards WITHOUT a display.
-	 * If there's an OLED, the heartbeat LED is redundant and wastes power. */
-#if HAS_HEARTBEAT_LED
-	if (gpio_is_ready_dt(&heartbeat_led)) {
-		gpio_pin_configure_dt(&heartbeat_led, GPIO_OUTPUT_INACTIVE);
-		k_work_init_delayable(&led_on_work, led_on_work_handler);
-		k_work_init_delayable(&led_off_work, led_off_work_handler);
-		/* Start heartbeat cycle */
-		k_work_reschedule(&led_on_work, K_NO_WAIT);
-		LOG_INF("LED heartbeat started");
-	}
-#endif
-#if HAS_MSG_LED
-	if (gpio_is_ready_dt(&msg_led)) {
-		gpio_pin_configure_dt(&msg_led, GPIO_OUTPUT_INACTIVE);
-		LOG_INF("msg LED ready");
-	}
-#endif
+	ui_led_heartbeat_init();
 
 	/* NOTE: startup chime is NOT played here. It's played from main()
 	 * after loadPrefs() so we can respect the persisted buzzer_quiet setting.
@@ -903,13 +804,25 @@ int ui_init(void)
 	return 0;
 }
 
-void ui_play_startup_chime(void)
+void ui_notify_contact_msg(uint8_t path_len, const char *from_name,
+			   const char *text, uint16_t msg_count)
 {
-#ifdef CONFIG_ZEPHCORE_UI_BUZZER
-	if (!buzzer_is_quiet()) {
-		buzzer_play(MELODY_STARTUP);
-	}
-#endif
+	(void)path_len; (void)from_name; (void)text;
+	ui_set_msg_count(msg_count);
+	ui_notify(UI_EVENT_CONTACT_MSG);
+}
+
+void ui_notify_channel_msg(const char *channel_name, const char *text,
+			   uint32_t ts, uint8_t path_len, uint16_t msg_count)
+{
+	(void)channel_name; (void)text; (void)ts; (void)path_len;
+	ui_set_msg_count(msg_count);
+	ui_notify(UI_EVENT_CHANNEL_MSG);
+}
+
+void ui_notify_packet_sent(void)
+{
+	/* Button UI has no per-packet tracking */
 }
 
 void ui_notify(enum ui_event event)
@@ -967,18 +880,9 @@ void ui_notify(enum ui_event event)
 		break;
 	}
 
-	/* On message events: flash heartbeat LED immediately (if not BLE connected
-	 * and LEDs are enabled). Cancel the current cycle, turn on now, let
-	 * led_off_work resume the normal heartbeat after LED_ON_MSG_MS. */
-#if HAS_HEARTBEAT_LED
-	if (is_msg_event && !get_state()->ble_connected && !get_state()->leds_disabled
-	    && gpio_is_ready_dt(&heartbeat_led)) {
-		k_work_cancel_delayable(&led_on_work);
-		k_work_cancel_delayable(&led_off_work);
-		gpio_pin_set_dt(&heartbeat_led, 1);
-		k_work_reschedule(&led_off_work, K_MSEC(LED_ON_MSG_MS));
+	if (is_msg_event && !get_state()->ble_connected) {
+		ui_led_flash_msg();
 	}
-#endif
 
 	/* Wake display on non-message notifications (BLE connect/disconnect etc).
 	 * Message notifications use buzzer + LED flash instead of waking the display. */
@@ -1054,7 +958,7 @@ void ui_set_radio_params(uint32_t freq_hz, uint8_t sf, uint16_t bw_khz_x10,
 }
 
 void ui_set_gps_data(bool has_fix, uint8_t sats,
-		     int32_t lat_mdeg, int32_t lon_mdeg, int32_t alt_mm)
+			 int32_t lat_mdeg, int32_t lon_mdeg, int32_t alt_mm)
 {
 	struct ui_state *s = get_state();
 
@@ -1182,28 +1086,6 @@ void ui_set_offgrid_mode(bool enabled)
 	s->offgrid_enabled = enabled;
 }
 
-void ui_set_leds_disabled(bool disabled)
-{
-	struct ui_state *s = get_state();
-
-	s->leds_disabled = disabled;
-}
-
-void ui_set_heartbeat_led(bool enabled)
-{
-#if HAS_HEARTBEAT_LED
-	if (enabled) {
-		if (gpio_is_ready_dt(&heartbeat_led)) {
-			k_work_reschedule(&led_on_work, K_NO_WAIT);
-		}
-	} else {
-		k_work_cancel_delayable(&led_on_work);
-		k_work_cancel_delayable(&led_off_work);
-		gpio_pin_set_dt(&heartbeat_led, 0);
-	}
-#endif
-}
-
 void ui_refresh_display(void)
 {
 	if (!ui_initialized) {
@@ -1223,4 +1105,16 @@ void ui_refresh_display(void)
 
 	schedule_render();
 #endif
+}
+
+/* ========== LED heartbeat overrides (ui_common.c weak functions) ========== */
+
+uint16_t ui_led_get_msg_count(void)
+{
+	return get_state()->msg_count;
+}
+
+void ui_led_on_disabled_changed(bool disabled)
+{
+	get_state()->leds_disabled = disabled;
 }

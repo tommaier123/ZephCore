@@ -78,6 +78,10 @@ struct NodePrefs {
 	uint8_t leds_disabled;          // 1 = LEDs off
 	char default_scope_name[31];    // companion: default flood scope region name ("" = null)
 	uint8_t default_scope_key[16];  // companion: default flood scope TransportKey
+	uint8_t ble_disabled;           // 1 = BLE advertising off
+	uint8_t display_brightness;     // 0 = default (100%), else 10–100
+	uint8_t wake_on_msg;            // 0 = don't wake display on message, 1 = wake (default)
+	uint16_t screen_off_secs;       // 0 = default (Kconfig), else 5–300
 };
 
 /* Default prefs -- must match LoRaConfig.h defaults for radio interop. */
@@ -124,4 +128,5 @@ static inline void initNodePrefs(NodePrefs* prefs) {
 	prefs->rx_duty_cycle = 0;         // Default OFF — continuous RX for best reliability
 	prefs->apc_enabled = 0;           // Default OFF — fixed TX power
 	prefs->apc_margin = 16;           // Default 16 dB target link margin
+	prefs->wake_on_msg = 1;           // Default ON — wake display when message arrives
 }

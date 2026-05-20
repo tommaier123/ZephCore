@@ -604,6 +604,33 @@ config ZEPHCORE_EASTER_EGG_DOOM
 	  on the first page. Double-click to exit.
 	  Adds ~5KB flash and ~1.7KB RAM when enabled.
 
+config ZEPHCORE_UI_JOYSTICK
+	bool
+	help
+	  Set by board-level Kconfig when the hardware has a 5-way joystick or
+	  D-pad. Not user-selectable; set by the board configuration.
+	  Follows the same pattern as ZEPHCORE_UI_BUTTONS and ZEPHCORE_UI_DISPLAY.
+
+config ZEPHCORE_UI_DESIGN_BUTTON
+	bool "Button-based page UI"
+	default y if (ZEPHCORE_UI_BUTTONS || ZEPHCORE_UI_DISPLAY || ZEPHCORE_UI_BUZZER) && !ZEPHCORE_UI_DESIGN_JOYSTICK
+	depends on (ZEPHCORE_UI_BUTTONS || ZEPHCORE_UI_DISPLAY || ZEPHCORE_UI_BUZZER) && !ZEPHCORE_UI_DESIGN_JOYSTICK
+	help
+	  Compile the default page-based button UI (helpers/ui-button/).
+	  Auto-selected when any UI hardware is present and the joystick UI
+	  design is not active. Disable to supply a custom ui_task.h
+	  implementation without touching this Kconfig.
+
+config ZEPHCORE_UI_DESIGN_JOYSTICK
+	bool "Joystick-based companion UI"
+	default y if ZEPHCORE_ROLE_COMPANION && ZEPHCORE_UI_DISPLAY && ZEPHCORE_UI_BUTTONS && ZEPHCORE_UI_JOYSTICK
+	depends on ZEPHCORE_ROLE_COMPANION && ZEPHCORE_UI_DISPLAY && ZEPHCORE_UI_BUTTONS && ZEPHCORE_UI_JOYSTICK
+	help
+	  Full joystick-driven companion UI (helpers/ui-joystick/). Provides GPS,
+	  contacts, channels, snake game, repeater admin, and all other companion
+	  screens via a 5-way joystick or D-pad. Replaces ZEPHCORE_UI_DESIGN_BUTTON
+	  for companion builds on boards with joystick hardware.
+
 endmenu
 
 endmenu

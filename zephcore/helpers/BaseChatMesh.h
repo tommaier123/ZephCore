@@ -143,6 +143,9 @@ protected:
 	virtual void sendFloodScoped(const ContactInfo &recipient, mesh::Packet *pkt, uint32_t delay_millis = 0);
 	virtual void sendFloodScoped(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t delay_millis = 0);
 
+	virtual void onLoginSent(const ContactInfo &contact) {}
+	virtual void onChannelAdded(ChannelDetails *ch) {}
+
 	// Storage concepts for subclasses to override
 	virtual int getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) { return 0; }
 	virtual bool putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], int len) { return false; }

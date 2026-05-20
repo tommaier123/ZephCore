@@ -17,6 +17,7 @@
 #define ZEPHCORE_DISPLAY_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -114,6 +115,13 @@ void mc_display_fill_rect(int x, int y, int w, int h);
 void mc_display_hline(int x, int y, int w);
 
 /**
+ * Invert a rectangular region of the framebuffer.
+ * Pixels that are on (white) become off (black) and vice versa.
+ * Used to create clean dark-background modal overlays.
+ */
+void mc_display_invert_rect(int x, int y, int w, int h);
+
+/**
  * Draw a monochrome bitmap (Adafruit/Arduino format).
  * MSB first, row-major, 1=foreground.
  * Compatible with Arduino's drawBitmap() and MeshCore icons.h data.
@@ -138,6 +146,13 @@ void mc_display_finalize(void);
 void mc_display_reset_auto_off(void);
 
 /**
+ * Override the auto-off timeout (0 = revert to Kconfig default).
+ * Call from the UI layer when the user changes the screen-off duration
+ * so the Kconfig-driven timer and the UI timer stay in sync.
+ */
+void mc_display_set_auto_off_ms(uint32_t ms);
+
+/**
  * EPD-only: force a full panel reset cycle before normal page rendering.
  * No-op on non-EPD displays or when display is not initialized.
  */
@@ -149,6 +164,13 @@ void mc_display_epd_full_reset(void);
  * Returns NULL if display not initialized.
  */
 const struct device *mc_display_get_device(void);
+
+/**
+ * Convert UTF-8 text to Latin-1 for display rendering.
+ * Passes ASCII unchanged, converts 2-byte Latin-1 (U+00A0-U+00FF),
+ * strips everything else (emojis, CJK). Trims leading spaces left by stripped chars.
+ */
+void utf8_to_latin1(char *dst, const char *src, size_t dst_size);
 
 #ifdef __cplusplus
 }

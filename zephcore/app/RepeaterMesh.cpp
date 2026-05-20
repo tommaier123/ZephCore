@@ -78,9 +78,6 @@ static void uplink_time_sync_cb(uint32_t unix_ts)
 #define SERVER_RESPONSE_DELAY       300
 #define TXT_ACK_DELAY               200
 
-#define CTL_TYPE_NODE_DISCOVER_REQ   0x80
-#define CTL_TYPE_NODE_DISCOVER_RESP  0x90
-
 /* Helper: futureMillis */
 static inline unsigned long futureMillis(uint32_t delta_ms) {
     return k_uptime_get() + delta_ms;

@@ -15,6 +15,10 @@
 #define ADV_TYPE_ROOM         3
 #define ADV_TYPE_SENSOR       4
 
+/* Control-packet type nibbles (upper nibble of payload[0]) */
+#define CTL_TYPE_NODE_DISCOVER_REQ   0x80
+#define CTL_TYPE_NODE_DISCOVER_RESP  0x90
+
 #define ADV_LATLON_MASK       0x10
 #define ADV_FEAT1_MASK        0x20
 #define ADV_FEAT2_MASK        0x40

@@ -219,6 +219,7 @@ protected:
 
 	/* Raw packet logging for app RX log */
 	void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
+	void logTx(mesh::Packet *pkt, int len) override;
 
 	/* Trace path response */
 	void onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code, uint8_t flags,
@@ -317,12 +318,16 @@ private:
 	uint32_t _pending_telemetry;
 	uint32_t _pending_discovery;
 	uint32_t _pending_req;
+	uint32_t _pending_joystick_ping_tag;  /* tag-based match, checked before pubkey-based _pending_status */
+	uint32_t _pending_joystick_admin_tag; /* same protection for admin binary requests */
 
 	/* Lazy contacts/channels write - batches rapid updates */
 	int64_t _dirty_contacts_expiry;
 	int64_t _dirty_channels_expiry;
 	static constexpr int64_t LAZY_WRITE_DELAY_MS = 5000;  /* 5 seconds, matches Arduino */
 
+	void onLoginSent(const ContactInfo &contact) override;
+	void onChannelAdded(ChannelDetails *ch) override;
 	void markContactsDirty();
 	void markChannelsDirty();
 	void flushDirtyContacts();
@@ -337,7 +342,16 @@ private:
 
 	void clearPendingReqs() {
 		_pending_login = _pending_status = _pending_telemetry = _pending_discovery = _pending_req = 0;
+		/* _pending_joystick_ping_tag is intentionally NOT cleared here
+		 * joystick ping is independent of BLE request state. */
 	}
+
+public:
+	void setJoystickPingTag(uint32_t tag)  { _pending_joystick_ping_tag = tag; }
+	void clearJoystickPingTag()            { _pending_joystick_ping_tag = 0; }
+	void setJoystickAdminTag(uint32_t tag) { _pending_joystick_admin_tag = tag; }
+	void clearJoystickAdminTag()           { _pending_joystick_admin_tag = 0; }
+private:
 
 	bool writeFrame(const uint8_t *data, size_t len);
 	void sendPacketOk();

@@ -47,6 +47,14 @@ int ui_init(void);
 void ui_play_startup_chime(void);
 
 /**
+ * Initialize the LED heartbeat hardware.
+ * Detects led0/led1 GPIO aliases, configures pins, and starts the
+ * self-rescheduling work chain. Safe to call when no LED is present.
+ * Must be called from ui_init() in every UI variant.
+ */
+void ui_led_heartbeat_init(void);
+
+/**
  * Post a notification event to the UI.
  * Triggers buzzer melody and/or display wake depending on event type.
  * Safe to call from any thread context.
@@ -167,6 +175,38 @@ void ui_set_offgrid_mode(bool enabled);
  * Trigger a display refresh (for periodic updates from housekeeping).
  */
 void ui_refresh_display(void);
+
+/**
+ * Notify UI of a received contact message.
+ * Rich UIs display the text and sender; simpler ones forward to
+ * ui_notify(UI_EVENT_CONTACT_MSG) + ui_set_msg_count().
+ *
+ * @param path_len   Hop count (OUT_PATH_UNKNOWN = direct/unknown)
+ * @param from_name  Sender display name
+ * @param text       Message text
+ * @param msg_count  Updated offline queue message count
+ */
+void ui_notify_contact_msg(uint8_t path_len, const char *from_name,
+			   const char *text, uint16_t msg_count);
+
+/**
+ * Notify UI of a received channel message.
+ * Rich UIs use all parameters; simpler ones fire ui_notify(UI_EVENT_CHANNEL_MSG).
+ *
+ * @param channel_name  Human-readable channel name
+ * @param text          Message text
+ * @param ts            Sender timestamp (epoch)
+ * @param path_len      Hop count (OUT_PATH_UNKNOWN = direct/unknown)
+ * @param msg_count     Updated offline queue message count
+ */
+void ui_notify_channel_msg(const char *channel_name, const char *text,
+			   uint32_t ts, uint8_t path_len, uint16_t msg_count);
+
+/**
+ * Notify UI that an outbound packet was transmitted.
+ * Rich UIs use this to start RTT timers; simpler ones ignore it.
+ */
+void ui_notify_packet_sent(void);
 
 #ifdef __cplusplus
 }
