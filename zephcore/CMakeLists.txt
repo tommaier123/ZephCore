@@ -186,6 +186,28 @@ endif()
 # Custom board root: boards/<mcu>/<board>/ discovered via BOARD_ROOT
 list(APPEND BOARD_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
+# ========== Auto-Pairing Helper ==========
+# For each .conf file, check if a same-named .overlay exists in the same directory.
+# If it does, auto-include it in EXTRA_DTC_OVERLAY_FILE. This enables variants to
+# pack both Kconfig and device tree changes together (e.g., no_display.conf + no_display.overlay).
+#
+# Usage: zephcore_auto_pair_overlay("path/to/config.conf")
+#
+function(zephcore_auto_pair_overlay CONF_FILE)
+    if(NOT CONF_FILE OR NOT EXISTS "${CONF_FILE}")
+        return()
+    endif()
+    string(REPLACE ".conf" ".overlay" OVERLAY_FILE "${CONF_FILE}")
+    if(EXISTS "${OVERLAY_FILE}")
+        if(EXTRA_DTC_OVERLAY_FILE)
+            set(EXTRA_DTC_OVERLAY_FILE "${EXTRA_DTC_OVERLAY_FILE};${OVERLAY_FILE}" PARENT_SCOPE)
+        else()
+            set(EXTRA_DTC_OVERLAY_FILE "${OVERLAY_FILE}" PARENT_SCOPE)
+        endif()
+        message(STATUS "  [auto-pair] ${CONF_FILE} → ${OVERLAY_FILE}")
+    endif()
+endfunction()
+
 # ========== Board Configuration Hierarchy ==========
 # prj.conf → zephcore_common.conf → <platform>_common.conf → <board>/board.conf
 
@@ -267,15 +289,19 @@ if(NOT ZEPHCORE_BOARD_CONF AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOAR
 endif()
 
 # Build the EXTRA_CONF_FILE list (append to any user-provided extras)
+# Auto-pair each .conf with a same-named .overlay if it exists.
 set(ZEPHCORE_CONF_FILES "")
 if(EXISTS ${ZEPHCORE_COMMON_CONF})
     list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_COMMON_CONF})
+    zephcore_auto_pair_overlay("${ZEPHCORE_COMMON_CONF}")
 endif()
 if(ZEPHCORE_PLATFORM_CONF AND EXISTS ${ZEPHCORE_PLATFORM_CONF})
     list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_PLATFORM_CONF})
+    zephcore_auto_pair_overlay("${ZEPHCORE_PLATFORM_CONF}")
 endif()
 if(ZEPHCORE_BOARD_CONF AND EXISTS ${ZEPHCORE_BOARD_CONF})
     list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_BOARD_CONF})
+    zephcore_auto_pair_overlay("${ZEPHCORE_BOARD_CONF}")
 endif()
 
 # Include logging tuning only for debug builds (when prod.conf is NOT active).
@@ -286,6 +312,7 @@ if(EXTRA_CONF_FILE MATCHES "prod\\.conf")
 else()
     if(EXISTS ${ZEPHCORE_LOGGING_CONF})
         list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_LOGGING_CONF})
+        zephcore_auto_pair_overlay("${ZEPHCORE_LOGGING_CONF}")
     endif()
 endif()
 
@@ -297,6 +324,7 @@ if(ZEPHCORE_PLATFORM_CONF MATCHES "esp32_common" AND EXTRA_CONF_FILE MATCHES "re
     set(ZEPHCORE_WIFI_OTA_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/wifi_ota.conf")
     if(EXISTS ${ZEPHCORE_WIFI_OTA_CONF})
         list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_WIFI_OTA_CONF})
+        zephcore_auto_pair_overlay("${ZEPHCORE_WIFI_OTA_CONF}")
         message(STATUS "  WiFi OTA: auto-enabled (ESP32 repeater)")
     endif()
 endif()
@@ -310,6 +338,14 @@ if(ZEPHCORE_CONF_FILES)
     else()
         set(EXTRA_CONF_FILE "${ZEPHCORE_CONF_FILES}" CACHE STRING "" FORCE)
     endif()
+endif()
+
+# Auto-pair user-supplied EXTRA_CONF_FILE entries with same-named .overlay files.
+# This allows repeater.conf + repeater.overlay, prod.conf + prod.overlay, etc.
+if(EXTRA_CONF_FILE)
+    foreach(_conf IN LISTS EXTRA_CONF_FILE)
+        zephcore_auto_pair_overlay("${_conf}")
+    endforeach()
 endif()
 
 # ========== DTC Overlay Hierarchy ==========
