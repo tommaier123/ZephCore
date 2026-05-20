@@ -335,7 +335,10 @@ bool BaseChatMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const ui
 bool BaseChatMesh::onContactPathRecv(ContactInfo &from, uint8_t *in_path, uint8_t in_path_len,
 	uint8_t *out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len)
 {
-	from.out_path_len = mesh::Packet::copyPath(from.out_path, out_path, out_path_len);
+	/* out_path is from the inner payload of a validated LoRa packet (caller path).
+	 * Existing contract is that the upstream parser bounds the available bytes;
+	 * pass MAX_PATH_SIZE to preserve behavior while making the bound explicit. */
+	from.out_path_len = mesh::Packet::copyPath(from.out_path, out_path, MAX_PATH_SIZE, out_path_len);
 	from.lastmod = getRTCClock()->getCurrentTime();
 
 	onContactPathUpdated(from);

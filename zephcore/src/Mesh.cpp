@@ -112,7 +112,8 @@ DispatcherAction Mesh::forwardMultipartDirect(Packet *pkt)
 	if (type == PAYLOAD_TYPE_ACK && pkt->payload_len >= 5) {
 		Packet tmp;
 		tmp.header = pkt->header;
-		tmp.path_len = Packet::copyPath(tmp.path, pkt->path, pkt->path_len);
+		/* Trusted source: pkt->path is MAX_PATH_SIZE-sized. */
+		tmp.path_len = Packet::copyPath(tmp.path, pkt->path, MAX_PATH_SIZE, pkt->path_len);
 		tmp.payload_len = pkt->payload_len - 1;
 		memcpy(tmp.payload, &pkt->payload[1], tmp.payload_len);
 		if (!_tables->hasSeen(&tmp)) {
@@ -130,7 +131,8 @@ void Mesh::routeDirectRecvAcks(Packet *packet, uint32_t delay_millis)
 		memcpy(&crc, packet->payload, 4);
 		Packet *a2 = createAck(crc);
 		if (a2) {
-			a2->path_len = Packet::copyPath(a2->path, packet->path, packet->path_len);
+			/* Trusted source: packet->path is MAX_PATH_SIZE-sized. */
+			a2->path_len = Packet::copyPath(a2->path, packet->path, MAX_PATH_SIZE, packet->path_len);
 			a2->header &= ~PH_ROUTE_MASK;
 			a2->header |= ROUTE_TYPE_DIRECT;
 			sendPacket(a2, 0, delay_millis);
@@ -385,7 +387,8 @@ DispatcherAction Mesh::onRecvPacket(Packet *pkt)
 			if (type == PAYLOAD_TYPE_ACK && pkt->payload_len >= 5) {
 				Packet tmp;
 				tmp.header = pkt->header;
-				tmp.path_len = Packet::copyPath(tmp.path, pkt->path, pkt->path_len);
+				/* Trusted source: pkt->path is MAX_PATH_SIZE-sized. */
+				tmp.path_len = Packet::copyPath(tmp.path, pkt->path, MAX_PATH_SIZE, pkt->path_len);
 				tmp.payload_len = pkt->payload_len - 1;
 				memcpy(tmp.payload, &pkt->payload[1], tmp.payload_len);
 
@@ -549,7 +552,11 @@ void Mesh::sendDirect(Packet *packet, const uint8_t *path, uint8_t path_len, uin
 		packet->path_len = 0;
 		pri = 5;
 	} else {
-		packet->path_len = Packet::copyPath(packet->path, path, path_len);
+		/* path is caller-supplied; existing contract is that the caller has
+		 * ensured at least the decoded path-byte-count is readable.  Pass
+		 * MAX_PATH_SIZE as the upper bound — this preserves existing
+		 * behavior while making the API explicit. */
+		packet->path_len = Packet::copyPath(packet->path, path, MAX_PATH_SIZE, path_len);
 		if (packet->getPayloadType() == PAYLOAD_TYPE_PATH) {
 			pri = 1;
 		} else {

@@ -630,7 +630,9 @@ void CompanionMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8
 		memcpy(ap->pubkey_prefix, contact.id.pub_key, 7);
 		memcpy(ap->name, contact.name, sizeof(ap->name));
 		ap->recv_timestamp = (uint32_t)getRTCClock()->getCurrentTime();
-		ap->path_len = mesh::Packet::copyPath(ap->path, path, path_len);
+		/* path source is from inbound advert; upstream parser bounds it within
+		 * the packet payload.  AdvertPath::path is MAX_PATH_SIZE-sized. */
+		ap->path_len = mesh::Packet::copyPath(ap->path, path, MAX_PATH_SIZE, path_len);
 		_next_advert_path_idx = (_next_advert_path_idx + 1) % ADVERT_PATH_TABLE_SIZE;
 	}
 
@@ -2597,7 +2599,8 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 				rsp[i++] = PACKET_ADVERT_PATH;
 				put_le32(&rsp[i], ap->recv_timestamp); i += 4;
 				rsp[i++] = ap->path_len;
-				i += mesh::Packet::writePath(&rsp[i], ap->path, ap->path_len);
+				/* Trusted source: AdvertPath::path is MAX_PATH_SIZE-sized. */
+				i += mesh::Packet::writePath(&rsp[i], ap->path, MAX_PATH_SIZE, ap->path_len);
 				writeFrame(rsp, i);
 			} else {
 				sendPacketError(ERR_NOT_FOUND);
@@ -2796,7 +2799,9 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 		return true;
 
 	case CMD_SEND_CHANNEL_DATA: {
-		if (len < 4) {
+		/* Minimum frame: cmd(1) + channel_idx(1) + path_len(1) + path(0..) +
+		 * data_type(2) + payload(0..) = 5 bytes when path is empty. */
+		if (len < 5) {
 			sendPacketError(ERR_ILLEGAL_ARG);
 			return true;
 		}
@@ -2810,9 +2815,25 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			return true;
 		}
 
+		/* Compute decoded path byte count and ensure source frame has room
+		 * for path + data_type. (path_len is the 6-bit hash_count + 2-bit
+		 * hash_size encoding; writePath itself will reject if src_len is
+		 * too small, but failing here also rejects truncated data_type.) */
+		uint8_t hash_count = path_len & 63;
+		uint8_t hash_size  = (path_len >> 6) + 1;
+		size_t path_bytes  = (path_len == OUT_PATH_UNKNOWN) ? 0
+		                                                  : (size_t)hash_count * hash_size;
+		if ((size_t)i + path_bytes + 2 > len) {
+			LOG_WRN("CMD_SEND_CHANNEL_DATA short frame: len=%u need >=%u",
+				(unsigned)len, (unsigned)(i + path_bytes + 2));
+			sendPacketError(ERR_ILLEGAL_ARG);
+			return true;
+		}
+
 		uint8_t path[MAX_PATH_SIZE];
 		if (path_len != OUT_PATH_UNKNOWN) {
-			i += mesh::Packet::writePath(path, &data[i], path_len);
+			/* src_len = remaining bytes from data[i] onward. */
+			i += mesh::Packet::writePath(path, &data[i], len - i, path_len);
 		}
 
 		uint16_t data_type = ((uint16_t)data[i]) | (((uint16_t)data[i + 1]) << 8);

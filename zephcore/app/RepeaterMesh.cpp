@@ -173,10 +173,13 @@ uint8_t RepeaterMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t
     return 13;
 }
 
-uint8_t RepeaterMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
+uint8_t RepeaterMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data, size_t data_len) {
     if (anon_limiter.allow(getRTCClock()->getCurrentTime())) {
+        if (data_len < 1) return 0;
         reply_path_len = *data++;
-        mesh::Packet::copyPath(reply_path, data, reply_path_len);
+        data_len--;
+        /* data is anon-req-supplied; bound copy with remaining data_len. */
+        mesh::Packet::copyPath(reply_path, data, data_len, reply_path_len);
 
         memcpy(reply_data, &sender_timestamp, 4);
         uint32_t now = getRTCClock()->getCurrentTime();
@@ -187,10 +190,13 @@ uint8_t RepeaterMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_
     return 0;
 }
 
-uint8_t RepeaterMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
+uint8_t RepeaterMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data, size_t data_len) {
     if (anon_limiter.allow(getRTCClock()->getCurrentTime())) {
+        if (data_len < 1) return 0;
         reply_path_len = *data++;
-        mesh::Packet::copyPath(reply_path, data, reply_path_len);
+        data_len--;
+        /* data is anon-req-supplied; bound copy with remaining data_len. */
+        mesh::Packet::copyPath(reply_path, data, data_len, reply_path_len);
 
         memcpy(reply_data, &sender_timestamp, 4);
         uint32_t now = getRTCClock()->getCurrentTime();
@@ -202,10 +208,13 @@ uint8_t RepeaterMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t 
     return 0;
 }
 
-uint8_t RepeaterMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
+uint8_t RepeaterMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data, size_t data_len) {
     if (anon_limiter.allow(getRTCClock()->getCurrentTime())) {
+        if (data_len < 1) return 0;
         reply_path_len = *data++;
-        mesh::Packet::copyPath(reply_path, data, reply_path_len);
+        data_len--;
+        /* data is anon-req-supplied; bound copy with remaining data_len. */
+        mesh::Packet::copyPath(reply_path, data, data_len, reply_path_len);
 
         memcpy(reply_data, &sender_timestamp, 4);
         uint32_t now = getRTCClock()->getCurrentTime();
@@ -609,11 +618,11 @@ void RepeaterMesh::onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, c
         if (data[4] == 0 || data[4] >= ' ') {
             reply_len = handleLoginReq(sender, secret, timestamp, &data[4], packet->isRouteFlood());
         } else if (data[4] == ANON_REQ_TYPE_REGIONS && packet->isRouteDirect()) {
-            reply_len = handleAnonRegionsReq(sender, timestamp, &data[5]);
+            reply_len = handleAnonRegionsReq(sender, timestamp, &data[5], (len > 5) ? (len - 5) : 0);
         } else if (data[4] == ANON_REQ_TYPE_OWNER && packet->isRouteDirect()) {
-            reply_len = handleAnonOwnerReq(sender, timestamp, &data[5]);
+            reply_len = handleAnonOwnerReq(sender, timestamp, &data[5], (len > 5) ? (len - 5) : 0);
         } else if (data[4] == ANON_REQ_TYPE_BASIC && packet->isRouteDirect()) {
-            reply_len = handleAnonClockReq(sender, timestamp, &data[5]);
+            reply_len = handleAnonClockReq(sender, timestamp, &data[5], (len > 5) ? (len - 5) : 0);
         } else {
             reply_len = 0;
         }
@@ -773,7 +782,9 @@ bool RepeaterMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const ui
     if (i >= 0 && i < acl.getNumClients()) {
         LOG_DBG("PATH to client, path_len=%d", path_len);
         auto client = acl.getClientByIdx(i);
-        client->out_path_len = mesh::Packet::copyPath(client->out_path, path, path_len);
+        /* path source bounded by upstream packet parser; client->out_path
+         * is MAX_PATH_SIZE-sized. */
+        client->out_path_len = mesh::Packet::copyPath(client->out_path, path, MAX_PATH_SIZE, path_len);
         client->last_activity = getRTCClock()->getCurrentTime();
     }
     return false;

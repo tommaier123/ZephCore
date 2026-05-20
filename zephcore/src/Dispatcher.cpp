@@ -437,7 +437,8 @@ void Dispatcher::checkSend()
 			memcpy(&raw[len], &outbound->transport_codes[1], 2); len += 2;
 		}
 		raw[len++] = outbound->path_len;
-		len += Packet::writePath(&raw[len], outbound->path, outbound->path_len);
+		/* Trusted source: outbound->path is MAX_PATH_SIZE-sized. */
+		len += Packet::writePath(&raw[len], outbound->path, MAX_PATH_SIZE, outbound->path_len);
 
 		if (len + outbound->payload_len > MAX_TRANS_UNIT) {
 			LOG_ERR("checkSend: packet too large len=%d+%d > %d", len, outbound->payload_len, MAX_TRANS_UNIT);
