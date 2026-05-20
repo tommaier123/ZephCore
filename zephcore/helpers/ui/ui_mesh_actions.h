@@ -60,6 +60,10 @@ void mesh_set_offgrid_mode(bool enable);
 void mesh_set_leds_disabled(bool disabled);
 void mesh_disable_power_regulators(void);
 void mesh_reboot_to_ota_dfu(void);
+void mesh_save_brightness(uint8_t brightness);
+void mesh_save_and_restart(void);
+void mesh_set_wake_on_msg(bool enabled);
+void mesh_save_screen_off_secs(uint16_t secs);
 
 #ifdef __cplusplus
 }

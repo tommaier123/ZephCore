@@ -147,12 +147,6 @@ enum ui_page ui_pages_current(void);
  */
 void ui_pages_set_node_name(const char *name);
 
-/**
- * Convert UTF-8 text to Latin-1 for display rendering.
- * Passes ASCII unchanged, converts 2-byte Latin-1 (U+00A0-U+00FF),
- * strips everything else (emojis, CJK).  Trims leading/trailing spaces.
- */
-void utf8_to_latin1(char *dst, const char *src, size_t dst_size);
 
 #ifdef __cplusplus
 }

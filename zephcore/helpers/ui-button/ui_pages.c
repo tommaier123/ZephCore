@@ -58,69 +58,6 @@ static const uint8_t zephcore_logo[] = {
 	0x3c, 0x01, 0xe0, 0x70, 0x7b, 0xff, 0x00, 0x00,
 };
 
-/* ========== UTF-8 to Latin-1 Sanitizer ========== */
-/* Node names may contain UTF-8 emojis or accented chars.
- * Our font covers 32-255 (ASCII + Latin-1 Supplement).
- * This function:
- *   - Passes ASCII (0x00-0x7F) unchanged
- *   - Converts 2-byte Latin-1 sequences (U+00A0-U+00FF) to raw bytes
- *   - Strips all other multi-byte sequences (emojis, CJK, etc.)
- *   - Strips leading/trailing whitespace from removed chars
- */
-void utf8_to_latin1(char *dst, const char *src, size_t dst_size)
-{
-	size_t di = 0;
-	size_t si = 0;
-
-	while (src[si] && di < dst_size - 1) {
-		uint8_t c = (uint8_t)src[si];
-
-		if (c < 0x80) {
-			/* ASCII byte — pass through */
-			dst[di++] = (char)c;
-			si++;
-		} else if ((c & 0xE0) == 0xC0) {
-			/* 2-byte UTF-8: 110xxxxx 10xxxxxx */
-			uint8_t c2 = (uint8_t)src[si + 1];
-
-			if ((c2 & 0xC0) != 0x80) {
-				/* Invalid continuation — skip lead byte */
-				si++;
-				continue;
-			}
-
-			uint16_t cp = ((c & 0x1F) << 6) | (c2 & 0x3F);
-
-			if (cp >= 0xA0 && cp <= 0xFF) {
-				/* Latin-1 Supplement — fits in our font */
-				dst[di++] = (char)(uint8_t)cp;
-			}
-			/* else: Latin Extended etc — skip */
-			si += 2;
-		} else if ((c & 0xF0) == 0xE0) {
-			/* 3-byte UTF-8 — skip (BMP: CJK, symbols) */
-			si += 3;
-		} else if ((c & 0xF8) == 0xF0) {
-			/* 4-byte UTF-8 — skip (emojis, supplementary) */
-			si += 4;
-		} else {
-			/* Invalid/continuation byte — skip */
-			si++;
-		}
-	}
-	dst[di] = '\0';
-
-	/* Strip leading spaces (from removed emoji prefix) */
-	size_t start = 0;
-
-	while (dst[start] == ' ') {
-		start++;
-	}
-	if (start > 0) {
-		memmove(dst, dst + start, di - start + 1);
-	}
-}
-
 /* ========== Layout ========== */
 /* All layout is derived from the actual display and font dimensions
  * queried at runtime, so the UI adapts to any resolution/font size.
@@ -528,7 +465,7 @@ static void render_buzzer(void)
 	y += LINE_H;
 
 	draw_centered(y + 8,
-		      state.buzzer_quiet ? "Press to Enable" : "Press to Disable");
+			  state.buzzer_quiet ? "Press to Enable" : "Press to Disable");
 }
 
 static void render_leds(void)
@@ -542,7 +479,7 @@ static void render_leds(void)
 	y += LINE_H;
 
 	draw_centered(y + 8,
-		      state.leds_disabled ? "Press to Enable" : "Press to Disable");
+			  state.leds_disabled ? "Press to Enable" : "Press to Disable");
 }
 
 static void render_sensors(void)
@@ -582,7 +519,7 @@ static void render_sensors(void)
 	/* Battery at bottom */
 	snprintf(buf, sizeof(buf), "Batt: %u%% (%umV)",
 		 state.battery_pct > 0 ? state.battery_pct
-				       : calc_battery_pct(state.battery_mv),
+					   : calc_battery_pct(state.battery_mv),
 		 state.battery_mv);
 	mc_display_text(0, y, buf, false);
 }
@@ -591,7 +528,7 @@ static void render_offgrid(void)
 {
 	/* Check if confirmation has expired */
 	if (state.offgrid_confirm_time != 0 &&
-	    (k_uptime_get_32() - state.offgrid_confirm_time) > CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
+		(k_uptime_get_32() - state.offgrid_confirm_time) > CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
 		state.offgrid_confirm_time = 0;
 	}
 
@@ -607,8 +544,8 @@ static void render_offgrid(void)
 		draw_centered(centered_row(2, 3), "Press to confirm");
 	} else {
 		draw_centered(centered_row(2, 3),
-			      state.offgrid_enabled ? "Press to Disable"
-						    : "Press to Enable");
+				  state.offgrid_enabled ? "Press to Disable"
+							: "Press to Enable");
 	}
 }
 
@@ -616,7 +553,7 @@ static void render_dfu(void)
 {
 	/* Check if confirmation has expired */
 	if (state.dfu_confirm_time != 0 &&
-	    (k_uptime_get_32() - state.dfu_confirm_time) > CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
+		(k_uptime_get_32() - state.dfu_confirm_time) > CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
 		state.dfu_confirm_time = 0;
 	}
 
@@ -632,7 +569,7 @@ static void render_shutdown(void)
 {
 	/* Check if confirmation has expired */
 	if (state.shutdown_confirm_time != 0 &&
-	    (k_uptime_get_32() - state.shutdown_confirm_time) > CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
+		(k_uptime_get_32() - state.shutdown_confirm_time) > CONFIG_ZEPHCORE_UI_CONFIRM_WINDOW_MS) {
 		state.shutdown_confirm_time = 0;
 	}
 

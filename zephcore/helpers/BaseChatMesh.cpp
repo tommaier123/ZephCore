@@ -616,15 +616,18 @@ int BaseChatMesh::sendLogin(const ContactInfo &recipient, const char *password, 
 	}
 	if (pkt) {
 		uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
+		int result;
 		if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
 			sendFloodScoped(recipient, pkt);
 			est_timeout = calcFloodTimeoutMillisFor(t);
-			return MSG_SEND_SENT_FLOOD;
+			result = MSG_SEND_SENT_FLOOD;
 		} else {
 			sendDirect(pkt, recipient.out_path, recipient.out_path_len);
 			est_timeout = calcDirectTimeoutMillisFor(t, recipient.out_path_len);
-			return MSG_SEND_SENT_DIRECT;
+			result = MSG_SEND_SENT_DIRECT;
 		}
+		onLoginSent(recipient);
+		return result;
 	}
 	return MSG_SEND_FAILED;
 }
@@ -805,6 +808,7 @@ ChannelDetails *BaseChatMesh::addChannel(const char *name, const uint8_t *psk, s
 			mesh::Utils::sha256(dest->channel.hash, sizeof(dest->channel.hash), dest->channel.secret, psk_len);
 			StrHelper::strncpy(dest->name, name, sizeof(dest->name));
 			num_channels++;
+			onChannelAdded(dest);
 			return dest;
 		}
 	}

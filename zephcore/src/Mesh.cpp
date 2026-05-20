@@ -92,7 +92,16 @@ DispatcherAction Mesh::routeRecvPacket(Packet *packet)
 	if (packet->isRouteFlood() && !packet->isMarkedDoNotRetransmit()
 		&& (n + 1)*packet->getPathHashSize() <= MAX_PATH_SIZE && allowPacketForward(packet)) {
 		// append this node's hash to 'path'
-		self_id.copyHashTo(&packet->path[n * packet->getPathHashSize()], packet->getPathHashSize());
+#ifdef ZEPHCORE_COMPANION
+			uint8_t prefix[4] = {};
+			/* Avoid confusions while using offgrid mode with real repeaters and force 01 (MOBILE node) */
+			prefix[0] = 0x01;
+			memcpy(&packet->path[n * packet->getPathHashSize()],
+				prefix,
+				packet->getPathHashSize());
+#else
+			self_id.copyHashTo(&packet->path[n * packet->getPathHashSize()], packet->getPathHashSize());
+#endif
 		packet->setPathHashCount(n + 1);
 		uint32_t h = ContentionTracker::computePacketHash32(packet);
 		_contention.trackRetransmit(h, (uint32_t)_ms->getMillis());

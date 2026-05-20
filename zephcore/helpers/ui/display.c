@@ -451,6 +451,17 @@ void mc_display_hline(int x, int y, int w)
 	cfb_draw_line(disp_dev, &start, &end);
 }
 
+void mc_display_invert_rect(int x, int y, int w, int h)
+{
+	if (!disp_initialized) {
+		return;
+	}
+	cfb_invert_area(disp_dev,
+		(uint16_t)(x + DISP_INSET), (uint16_t)(y + DISP_INSET),
+		(uint16_t)w, (uint16_t)h
+	);
+}
+
 void mc_display_xbm(int x, int y, const uint8_t *data, int w, int h)
 {
 	if (!disp_initialized || !data) {
@@ -507,6 +518,13 @@ void mc_display_finalize(void)
 	}
 }
 
+static uint32_t auto_off_ms_override;
+
+void mc_display_set_auto_off_ms(uint32_t ms)
+{
+	auto_off_ms_override = ms;
+}
+
 void mc_display_reset_auto_off(void)
 {
 	if (!disp_initialized) {
@@ -514,7 +532,9 @@ void mc_display_reset_auto_off(void)
 	}
 
 #ifdef CONFIG_ZEPHCORE_UI_DISPLAY_AUTO_OFF_MS
-	uint32_t timeout = CONFIG_ZEPHCORE_UI_DISPLAY_AUTO_OFF_MS;
+	uint32_t timeout = auto_off_ms_override
+		? auto_off_ms_override
+		: CONFIG_ZEPHCORE_UI_DISPLAY_AUTO_OFF_MS;
 
 	if (timeout > 0) {
 		k_work_reschedule(&auto_off_work, K_MSEC(timeout));
@@ -543,4 +563,47 @@ void mc_display_epd_full_reset(void)
 const struct device *mc_display_get_device(void)
 {
 	return disp_initialized ? disp_dev : NULL;
+}
+
+/* ========== UTF-8 to Latin-1 Sanitizer ========== */
+void utf8_to_latin1(char *dst, const char *src, size_t dst_size)
+{
+	size_t di = 0;
+	size_t si = 0;
+
+	while (src[si] && di < dst_size - 1) {
+		uint8_t c = (uint8_t)src[si];
+
+		if (c < 0x80) {
+			dst[di++] = (char)c;
+			si++;
+		} else if ((c & 0xE0) == 0xC0) {
+			uint8_t c2 = (uint8_t)src[si + 1];
+
+			if ((c2 & 0xC0) != 0x80) {
+				si++;
+				continue;
+			}
+			uint16_t cp = ((c & 0x1F) << 6) | (c2 & 0x3F);
+			if (cp >= 0xA0 && cp <= 0xFF) {
+				dst[di++] = (char)(uint8_t)cp;
+			}
+			si += 2;
+		} else if ((c & 0xF0) == 0xE0) {
+			si += 3;
+		} else if ((c & 0xF8) == 0xF0) {
+			si += 4;
+		} else {
+			si++;
+		}
+	}
+	dst[di] = '\0';
+
+	size_t start = 0;
+	while (dst[start] == ' ') {
+		start++;
+	}
+	if (start > 0) {
+		memmove(dst, dst + start, di - start + 1);
+	}
 }

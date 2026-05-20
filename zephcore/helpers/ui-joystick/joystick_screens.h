@@ -1,0 +1,484 @@
+/*
+ * ZephCore - Joystick UI Screens
+ * Copyright (c) 2026 ZephCore
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * All screen class declarations for the joystick UI.
+ */
+
+#pragma once
+
+#include "joystick_display.h"
+#include "joystick_defs.h"
+#include <helpers/ContactInfo.h>
+#include <helpers/ChannelDetails.h>
+#include <mesh/Mesh.h>
+#include <stdint.h>
+#include "CompanionMesh.h"
+
+class JoystickUITask;
+
+/* ===== UIScreen base class ===== */
+class UIScreen {
+public:
+	virtual ~UIScreen() {}
+	virtual int render(JoystickDisplay &display) = 0;
+	virtual bool handleInput(char c) { (void)c; return false; }
+	virtual void poll() {}
+};
+
+/* ===== Admin command size limits ===== */
+#ifndef ADMIN_PASSWORD_MAX
+#define ADMIN_PASSWORD_MAX	 32
+#endif
+#define ADMIN_CMD_MAX		 48
+#define ADMIN_RESP_MAX		 256
+#define ADMIN_HIST_MAX		 6
+
+/* ===== SplashScreen ===== */
+class SplashScreen : public UIScreen {
+	JoystickUITask *_task;
+	uint32_t _dismiss_after;
+public:
+	SplashScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	void poll() override;
+};
+
+/* ===== HomeScreen ===== */
+class HomeScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected;
+public:
+	HomeScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	void poll() override;
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== AdvertScreen ===== */
+class AdvertScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected;
+	int _last_rendered_selected;
+	uint32_t _marquee_start_ms;
+	bool _settings_open;
+	struct AdvertPath _recent_adverts[16];
+	int _recent_advert_count;
+	uint32_t _recent_refresh_at;
+
+	void refreshRecentAdverts();
+	int getRecentAdvertCount() const;
+	bool getRecentAdvertByIndex(int idx, struct AdvertPath &path) const;
+public:
+	AdvertScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== GPSSettingsScreen ===== */
+class GPSSettingsScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected;
+	bool _have_prev_fix;
+	int32_t _prev_lat_e6, _prev_lon_e6;
+	uint32_t _last_sample_ms;
+	float _speed_kmh, _heading_deg;
+	bool _heading_valid;
+	uint32_t _heading_hold_until;
+public:
+	GPSSettingsScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+};
+
+/* ===== SystemScreen ===== */
+enum SystemMode { SYSMODE_TOP=0, SYSMODE_DEVICE, SYSMODE_DISPLAY, SYSMODE_INFO, SYSMODE_POWER, SYSMODE_OFFGRID_CONFIRM };
+class SystemScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected, _cat_selected;
+	SystemMode _mode;
+	uint32_t _dfu_confirm_time;
+public:
+	SystemScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== SystemTimeScreen ===== */
+class SystemTimeScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+public:
+	SystemTimeScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== TelemetryScreen ===== */
+class TelemetryScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected;
+public:
+	TelemetryScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== ToolsScreen ===== */
+class ToolsScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected;
+public:
+	ToolsScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== RadioStatsScreen ===== */
+class RadioStatsScreen : public UIScreen {
+	JoystickUITask *_task;
+public:
+	RadioStatsScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== RepeatersScreen ===== */
+class RepeatersScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected;
+	int _mode;
+	int _last_sel;
+	uint32_t _marquee_start_ms;
+	int _modal_idx;
+public:
+	RepeatersScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+};
+
+/* ===== ChannelsScreen ===== */
+class ChannelsScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected;
+	bool _show_msgs;
+	char _msg_channel[32];
+	int _msg_channel_idx;
+	int _msg_scroll;
+	bool _msg_details;
+	int _msg_detail_scroll;
+
+	int getChannelCount() const;
+	bool getChannelByListIndex(int listIdx, ChannelDetails &ch, int *slot_out = nullptr) const;
+public:
+	ChannelsScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== T9InputScreen ===== */
+class T9InputScreen : public UIScreen {
+	JoystickUITask *_task;
+	char _input[256];
+	int _cursor;
+	int _selected_key;
+	uint32_t _last_press_time;
+	int _letter_index;
+	int _last_key;
+	bool _confirm_exit;
+	int _confirm_selected;
+	bool _kb_mode_letters;
+
+	void addLetter(char ch);
+	void backspace();
+public:
+	T9InputScreen(JoystickUITask *task);
+	void clearInput() { memset(_input, 0, sizeof(_input)); _cursor = 0; }
+	const char *getInput() const { return _input; }
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== RenameNodeScreen ===== */
+class RenameNodeScreen : public UIScreen {
+	JoystickUITask *_task;
+	char _input[32];
+	bool _loaded;
+	int _cursor;
+	int _selected_key;
+	uint32_t _last_press_time;
+	int _letter_index;
+	int _last_key;
+	bool _kb_mode_letters;
+public:
+	RenameNodeScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== BLECodeScreen ===== */
+class BLECodeScreen : public UIScreen {
+	JoystickUITask *_task;
+	char _pin_buf[8];
+	bool _editing;
+	int _digit_sel;
+public:
+	BLECodeScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== StatsScreen ===== */
+class StatsScreen : public UIScreen {
+	JoystickUITask *_task;
+public:
+	StatsScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+};
+
+/* ===== StopwatchScreen ===== */
+class StopwatchScreen : public UIScreen {
+	JoystickUITask *_task;
+	bool _running;
+	uint32_t _start_ms;
+	uint32_t _elapsed_ms;
+	int _laps;
+	uint32_t _lap_times[10];
+	int _scroll;
+public:
+	StopwatchScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+};
+
+/* ===== CountdownScreen ===== */
+class CountdownScreen : public UIScreen {
+	JoystickUITask *_task;
+	bool _running;
+	uint32_t _end_ms;
+	int _set_seconds;
+	int _edit_field;
+	bool _alarmed;
+public:
+	CountdownScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+};
+
+/* ===== SnakeScreen ===== */
+class SnakeScreen : public UIScreen {
+	JoystickUITask *_task;
+	static const int GRID_W = 21;
+	static const int GRID_H = 5;
+	int8_t _snake_x[GRID_W * GRID_H];
+	int8_t _snake_y[GRID_W * GRID_H];
+	int _snake_len;
+	int8_t _food_x, _food_y;
+	uint32_t _next_move;
+	int _score;
+
+	void placeFood();
+	void reset();
+public:
+	SnakeScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+};
+
+/* ===== DoomScreen ===== */
+#ifdef CONFIG_ZEPHCORE_EASTER_EGG_DOOM
+class DoomScreen : public UIScreen {
+	JoystickUITask *_task;
+public:
+	DoomScreen(JoystickUITask *task);
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+};
+#endif
+
+/* ===== ContactsScreen ===== */
+class ContactsScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	int _selected;
+	int _filter;
+	int _mode;
+	int _submenu_selected;
+	int _chat_selected;
+	bool _chat_details;
+	int _chat_detail_scroll;
+	ContactInfo _active_contact;
+	bool _active_contact_valid;
+	int _idx_send_message;
+	int _idx_edit_path;
+	int _idx_reset_path;
+	int _idx_favorite;
+	int _idx_delete;
+	int _idx_repeater_admin;
+	int _idx_ping_zerohop;
+
+	/* Edit path T9 keyboard state */
+	char _editpath_hexbuf[MAX_PATH_SIZE * 2 + 1];
+	int _editpath_cursor;
+	int _editpath_t9_sel;
+	int _editpath_t9_last_key;
+	int _editpath_t9_letter_index;
+	uint32_t _editpath_t9_last_press;
+	bool _editpath_kb_letters;
+	bool _editpath_confirm_exit;
+	int _editpath_confirm_sel;
+	uint32_t _header_marquee_ms;
+
+	/* Ping state (zero hop) */
+	uint32_t _ping_sent_at;		  /* k_uptime_get_32() when ping was sent, 0=idle */
+	uint32_t _ping_timeout_ms;	  /* est_timeout from sendRequest (ms), 0=unknown */
+	int8_t _ping_snr_local;		/* SNR (dB) of reply as received by us */
+	int8_t _ping_snr_remote;	/* SNR of our ping as received by repeater, INT8_MIN if unknown */
+	uint32_t _ping_rtt_ms;		  /* RTT: 0=no result yet, UINT32_MAX=timeout, else ms */
+	bool _ping_modal_active;  /* modal overlay visible */
+
+	int clampStart(int contactCount) const;
+	int getFilteredContactCount() const;
+	bool getFilteredContactByIndex(int listIndex, ContactInfo &contact) const;
+	bool refreshActiveContact();
+	int buildSubmenuItems(const char *items[], char text[][48], int max_items);
+
+public:
+	ContactsScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	void openForPubKey(const uint8_t *prefix, int prefix_len);
+	void onPingResponse(int8_t snr_local, int8_t snr_remote, uint32_t rtt_ms);
+	void onPacketSent();
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+};
+
+/* ===== UnreadScreen ===== */
+class UnreadScreen : public UIScreen {
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+
+	struct MsgEntry {
+		uint32_t timestamp;
+		char origin[80];
+		char msg[240];
+		bool read;
+	};
+
+	static const int MAX_UNREAD_MSGS = 32;
+	MsgEntry _entries[MAX_UNREAD_MSGS];
+	int _entry_count;
+	int _visible_unread_count;
+	int _head_index;
+	int _selected;
+	int _list_scroll;
+	bool _details;
+	int _detail_scroll;
+	bool _transient_preview;
+	uint32_t _preview_expiry;
+
+	void normalizeUnreadState();
+	const MsgEntry *getByListIndex(int idx) const;
+	void markCurrentRead();
+
+public:
+	UnreadScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	void activatePreview(bool transient, uint32_t timeout_ms = 10000);
+	int getUnreadCount();
+	int getStoredMsgCount() const;
+	void addPreview(uint8_t path_len, const char *from_name, const char *msg);
+	bool getStoredMessageForSourceAt(const char *source, uint32_t ts, const char *&out_msg) const;
+	bool getLatestStoredMessageForSource(const char *source, const char *&out_msg, uint32_t *out_ts = nullptr) const;
+	int getContactMsgCount(const char *contact_name) const;
+	bool getContactMsgAt(const char *contact_name, int idx, const char *&out_msg,
+						 uint32_t &out_ts, uint8_t *out_path = nullptr) const;
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+};
+
+/* ===== RepeaterAdminScreen ===== */
+class RepeaterAdminScreen : public UIScreen {
+public:
+	enum AdminState	 { STATE_PASSWORD_ENTRY, STATE_LOGGING_IN, STATE_SUBMENU, STATE_MAIN, STATE_CMD_INPUT };
+	enum PendingKind { PENDING_NONE, PENDING_CMD, PENDING_BINARY_STATUS, PENDING_BINARY_NEIGHBOURS,
+					   PENDING_BINARY_TELEMETRY, PENDING_BINARY_OWNER_INFO };
+
+	RepeaterAdminScreen(JoystickUITask *task, mesh::RTCClock *rtc);
+	void openForContact(const uint8_t *pub_key, const char *name, bool from_contacts = false);
+	void onLoginResult(bool success, uint8_t permissions, uint32_t server_time);
+	void onCliResponse(const char *text);
+	void onReqResponse(const uint8_t *pub_key_prefix, const uint8_t *data, uint8_t data_len);
+	void onPacketSent();
+	int render(JoystickDisplay &display) override;
+	bool handleInput(char c) override;
+	void poll() override;
+
+private:
+	JoystickUITask *_task;
+	mesh::RTCClock *_rtc;
+	AdminState _state;
+	uint8_t _contact_pubkey[PUB_KEY_SIZE];
+	bool _from_contacts;
+	char _repeater_name[32];
+	uint32_t _admin_header_marquee_ms;
+	uint8_t _permissions;
+	uint32_t _server_time;
+
+	/* Password entry */
+	char _password[ADMIN_PASSWORD_MAX];
+	int _pwd_len;
+	int _pwd_t9_sel, _pwd_t9_last_key, _pwd_t9_letter_index;
+	uint32_t _pwd_t9_last_press;
+	bool _pwd_kb_letters;
+
+	/* Submenu state */
+	int _submenu_sel;
+
+	/* Main state */
+	PendingKind _pending;
+	uint32_t _last_sent_at;
+	uint32_t _cmd_timeout_ms;
+	bool _awaiting_tx;
+
+	/* Command history ring buffer */
+	struct CmdEntry {
+		char cmd[ADMIN_CMD_MAX];
+		char resp[ADMIN_RESP_MAX];
+		bool has_resp;
+	};
+	CmdEntry _hist[ADMIN_HIST_MAX];
+	int _hist_head;
+	int _hist_count;
+	int _hist_scroll;
+	int _resp_line_scroll;
+	int _resp_max_line_scroll;
+
+	/* Command compose (STATE_CMD_INPUT) */
+	char _cmd_buf[ADMIN_CMD_MAX];
+	int _cmd_len;
+	int _cmd_t9_sel, _cmd_t9_last_key, _cmd_t9_letter_index;
+	uint32_t _cmd_t9_last_press;
+	bool _cmd_kb_letters;
+
+	bool sendCLI(const char *cmd);
+	void goBack();
+	CmdEntry	   &histAt(int i)		{ return _hist[(_hist_head + i) % ADMIN_HIST_MAX]; }
+	const CmdEntry &histAt(int i) const { return _hist[(_hist_head + i) % ADMIN_HIST_MAX]; }
+};

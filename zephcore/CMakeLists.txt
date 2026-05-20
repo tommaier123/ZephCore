@@ -572,7 +572,6 @@ endif()
 if(CONFIG_ZEPHCORE_UI_DISPLAY)
   target_sources(app PRIVATE
     helpers/ui/display.c
-    helpers/ui/ui_pages.c
     helpers/ui/cfb_font_0608.c
   )
 endif()
@@ -585,7 +584,7 @@ endif()
 
 if(CONFIG_ZEPHCORE_UI_BUTTONS OR CONFIG_ZEPHCORE_UI_BUZZER OR CONFIG_ZEPHCORE_UI_DISPLAY)
   target_sources(app PRIVATE
-    helpers/ui/ui_task.c
+    helpers/ui/ui_common.c
   )
   target_include_directories(app PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/helpers/ui
@@ -596,6 +595,37 @@ if(CONFIG_ZEPHCORE_UI_BUTTONS OR CONFIG_ZEPHCORE_UI_BUZZER OR CONFIG_ZEPHCORE_UI
       helpers/ui/ui_mesh_actions_stubs.c
     )
   endif()
+endif()
+
+if(CONFIG_ZEPHCORE_UI_DESIGN_BUTTON)
+  target_sources(app PRIVATE
+    helpers/ui-button/ui_task.c
+  )
+  target_include_directories(app PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/helpers/ui-button
+  )
+endif()
+
+if(CONFIG_ZEPHCORE_UI_DISPLAY AND CONFIG_ZEPHCORE_UI_DESIGN_BUTTON)
+  target_sources(app PRIVATE
+    helpers/ui-button/ui_pages.c
+  )
+endif()
+
+if(CONFIG_ZEPHCORE_UI_DISPLAY AND CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+  target_sources(app PRIVATE
+    helpers/ui-joystick/joystick_ui_task.cpp
+    helpers/ui-joystick/joystick_ui_hooks.cpp
+    helpers/ui-joystick/screens/home.cpp
+    helpers/ui-joystick/screens/contacts.cpp
+    helpers/ui-joystick/screens/messaging.cpp
+    helpers/ui-joystick/screens/tools.cpp
+    helpers/ui-joystick/screens/system.cpp
+    helpers/ui-joystick/screens/input.cpp
+  )
+  target_include_directories(app PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/helpers/ui-joystick
+  )
 endif()
 
 if(CONFIG_ZEPHCORE_EASTER_EGG_DOOM)

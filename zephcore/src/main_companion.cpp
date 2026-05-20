@@ -36,6 +36,11 @@ LOG_MODULE_REGISTER(zephcore_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #include <ZephyrCompanionUSB.h>
 #endif
 
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+#include <joystick_ui_task.h>
+#include <joystick_ui_hooks.h>
+#endif
+
 /* Radio + mesh includes (shared header selects LR1110 or SX126x) */
 #include <mesh/RadioIncludes.h>
 #ifdef ZEPHCORE_LORA
@@ -70,7 +75,15 @@ extern "C" void bt_ctlr_assert_handle(char *file, uint32_t line)
 #define MESH_EVENT_UI_ACTION     BIT(4)  /* Button action from UI (deferred to mesh thread) */
 #define MESH_EVENT_GPS_ACTION    BIT(5)  /* GPS state change (must run on main thread!) */
 #define MESH_EVENT_TX_DRAIN      BIT(6)  /* Outbound packet delay expired, run checkSend */
-#define MESH_EVENT_ALL           (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE | MESH_EVENT_BLE_RX | MESH_EVENT_HOUSEKEEPING | MESH_EVENT_UI_ACTION | MESH_EVENT_GPS_ACTION | MESH_EVENT_TX_DRAIN)
+#define MESH_EVENT_BASE          (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE | \
+	MESH_EVENT_BLE_RX | MESH_EVENT_HOUSEKEEPING | MESH_EVENT_UI_ACTION |  \
+	MESH_EVENT_GPS_ACTION | MESH_EVENT_TX_DRAIN)
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+#define MESH_EVENT_JOYSTICK_LOOP BIT(7)  /* Joystick UI loop tick (50 ms) */
+#define MESH_EVENT_ALL           (MESH_EVENT_BASE | MESH_EVENT_JOYSTICK_LOOP)
+#else
+#define MESH_EVENT_ALL           MESH_EVENT_BASE
+#endif
 
 /* Housekeeping interval - infrequent to preserve power savings */
 #define HOUSEKEEPING_INTERVAL_MS CONFIG_ZEPHCORE_HOUSEKEEPING_INTERVAL_MS
@@ -82,6 +95,20 @@ static struct k_event mesh_events;
 static void rx_process_work_fn(struct k_work *work);
 static void contact_iter_work_fn(struct k_work *work);
 static void housekeeping_timer_fn(struct k_timer *timer);
+
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+static JoystickUITask joystick_ui_task;
+
+static void joystick_signal_refresh(void)
+{
+	k_event_post(&mesh_events, MESH_EVENT_JOYSTICK_LOOP);
+}
+
+static void joystick_signal_tx(void)
+{
+	k_event_post(&mesh_events, MESH_EVENT_TX_DRAIN);
+}
+#endif
 
 K_WORK_DEFINE(rx_process_work, rx_process_work_fn);
 K_WORK_DEFINE(contact_iter_work, contact_iter_work_fn);
@@ -315,6 +342,12 @@ static void mesh_event_loop(void)
 			mesh_housekeeping_ui_refresh();
 		}
 #endif
+
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+		if (events & MESH_EVENT_JOYSTICK_LOOP) {
+			joystick_ui_task.loop();
+		}
+#endif
 	}
 }
 
@@ -478,6 +511,9 @@ static void bt_ready(int err)
 #else
 	zephcore_ble_start(NULL);
 #endif
+	if (companion_mesh.prefs.ble_disabled) {
+		zephcore_ble_set_enabled(false);
+	}
 }
 
 int main(void)
@@ -516,6 +552,9 @@ int main(void)
 	 * If display is present, ui_init() handles display init + auto-off.
 	 * If no display, fall back to raw OLED sleep for power saving. */
 	ui_init();
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+	joystick_ui_hooks_register(&joystick_ui_task, joystick_signal_refresh, joystick_signal_tx);
+#endif
 #if !IS_ENABLED(CONFIG_ZEPHCORE_UI_DISPLAY)
 	oled_sleep();
 #endif
@@ -690,6 +729,10 @@ int main(void)
 	ui_mesh_actions_init(&mesh_events, MESH_EVENT_UI_ACTION,
 			     &companion_mesh, &data_store,
 			     &lora_radio, &zephyr_board, &rtc_clock);
+
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+	joystick_ui_task.begin(&companion_mesh, &rtc_clock, &companion_mesh.prefs);
+#endif
 #endif
 
 	/* Initialize BLE adapter (registers auth callbacks) */

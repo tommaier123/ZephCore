@@ -14,6 +14,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/regulator.h>
+#include <zephyr/sys/reboot.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(zephcore_ui_actions, CONFIG_ZEPHCORE_UI_ACTIONS_LOG_LEVEL);
@@ -26,15 +27,23 @@ LOG_MODULE_REGISTER(zephcore_ui_actions, CONFIG_ZEPHCORE_UI_ACTIONS_LOG_LEVEL);
 #include <ZephyrBLE.h>
 #include <ZephyrSensorManager.h>
 #include "ui_task.h"
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+#include <joystick_ui_hooks.h>
+#endif
 #include "ui_mesh_actions.h"
 
 /* UI action bit flags — set from input thread, consumed by mesh event loop */
-#define UI_ACTION_FLOOD_ADVERT   BIT(0)
-#define UI_ACTION_GPS_TOGGLE     BIT(1)
-#define UI_ACTION_BUZZER_TOGGLE  BIT(2)
-#define UI_ACTION_ZEROHOP_ADVERT BIT(3)
-#define UI_ACTION_OFFGRID_TOGGLE BIT(4)
-#define UI_ACTION_LEDS_TOGGLE    BIT(5)
+#define UI_ACTION_FLOOD_ADVERT      BIT(0)
+#define UI_ACTION_GPS_TOGGLE        BIT(1)
+#define UI_ACTION_BUZZER_TOGGLE     BIT(2)
+#define UI_ACTION_ZEROHOP_ADVERT    BIT(3)
+#define UI_ACTION_OFFGRID_TOGGLE    BIT(4)
+#define UI_ACTION_LEDS_TOGGLE       BIT(5)
+#define UI_ACTION_BLE_TOGGLE        BIT(6)
+#define UI_ACTION_BRIGHTNESS_SAVE   BIT(7)
+#define UI_ACTION_SAVE_RESTART      BIT(8)
+#define UI_ACTION_WAKE_ON_MSG_SAVE  BIT(9)
+#define UI_ACTION_SCREEN_OFF_SAVE   BIT(10)
 
 /* Module-local pointers, set by init */
 static CompanionMesh *s_mesh;
@@ -55,6 +64,10 @@ static atomic_t pending_gps_enabled;
 static atomic_t pending_buzzer_quiet;
 static atomic_t pending_offgrid_enabled;
 static atomic_t pending_leds_disabled;
+static atomic_t pending_ble_disabled;
+static atomic_t pending_brightness;
+static atomic_t pending_wake_on_msg;
+static atomic_t pending_screen_off_secs;
 
 extern "C" void ui_mesh_actions_init(struct k_event *mesh_events,
 				     uint32_t mesh_event_ui_action,
@@ -99,6 +112,36 @@ extern "C" void mesh_gps_set_enabled(bool enable)
 extern "C" void mesh_ble_set_enabled(bool enable)
 {
 	zephcore_ble_set_enabled(enable);
+	atomic_set(&pending_ble_disabled, enable ? 0 : 1);
+	atomic_or(&pending_ui_actions, UI_ACTION_BLE_TOGGLE);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
+}
+
+extern "C" void mesh_save_brightness(uint8_t brightness)
+{
+	atomic_set(&pending_brightness, (atomic_val_t)brightness);
+	atomic_or(&pending_ui_actions, UI_ACTION_BRIGHTNESS_SAVE);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
+}
+
+extern "C" void mesh_save_and_restart(void)
+{
+	atomic_or(&pending_ui_actions, UI_ACTION_SAVE_RESTART);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
+}
+
+extern "C" void mesh_set_wake_on_msg(bool enabled)
+{
+	atomic_set(&pending_wake_on_msg, enabled ? 1 : 0);
+	atomic_or(&pending_ui_actions, UI_ACTION_WAKE_ON_MSG_SAVE);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
+}
+
+extern "C" void mesh_save_screen_off_secs(uint16_t secs)
+{
+	atomic_set(&pending_screen_off_secs, (atomic_val_t)secs);
+	atomic_or(&pending_ui_actions, UI_ACTION_SCREEN_OFF_SAVE);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
 }
 
 extern "C" void mesh_set_buzzer_quiet(bool quiet)
@@ -217,9 +260,40 @@ extern "C" void mesh_handle_ui_actions(void)
 		need_save = true;
 	}
 
-	if (need_save) {
+	if (actions & UI_ACTION_BLE_TOGGLE) {
+		bool bd = atomic_get(&pending_ble_disabled) != 0;
+		s_mesh->prefs.ble_disabled = bd ? 1 : 0;
+		LOG_INF("ble_disabled=%d (button)", bd);
+		need_save = true;
+	}
+
+	if (actions & UI_ACTION_BRIGHTNESS_SAVE) {
+		uint8_t br = (uint8_t)atomic_get(&pending_brightness);
+		s_mesh->prefs.display_brightness = br;
+		LOG_INF("display_brightness=%d (button)", br);
+		need_save = true;
+	}
+
+	if (actions & UI_ACTION_WAKE_ON_MSG_SAVE) {
+		s_mesh->prefs.wake_on_msg = atomic_get(&pending_wake_on_msg) ? 1 : 0;
+		LOG_INF("wake_on_msg=%d (button)", s_mesh->prefs.wake_on_msg);
+		need_save = true;
+	}
+
+	if (actions & UI_ACTION_SCREEN_OFF_SAVE) {
+		s_mesh->prefs.screen_off_secs = (uint16_t)atomic_get(&pending_screen_off_secs);
+		LOG_INF("screen_off_secs=%d (button)", s_mesh->prefs.screen_off_secs);
+		need_save = true;
+	}
+
+	if (need_save || (actions & UI_ACTION_SAVE_RESTART)) {
 		s_data_store->savePrefs(s_mesh->prefs);
 		LOG_INF("prefs saved (button action)");
+	}
+
+	if (actions & UI_ACTION_SAVE_RESTART) {
+		LOG_INF("rebooting (save+restart action)");
+		sys_reboot(SYS_REBOOT_COLD);
 	}
 }
 
@@ -244,6 +318,12 @@ extern "C" void mesh_housekeeping_ui_refresh(void)
 		s_mesh->prefs.cr,
 		s_mesh->prefs.tx_power_dbm,
 		s_lora_radio->getNoiseFloor());
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+	ui_notify_radio_stats(
+		s_lora_radio->getPacketsRecv(),
+		s_lora_radio->getPacketsSent(),
+		s_lora_radio->getPacketsRecvErrors());
+#endif
 
 	/* Update GPS satellite count even without fix */
 	if (gps_is_enabled()) {
