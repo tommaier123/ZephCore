@@ -194,3 +194,33 @@ void ui_led_flash_msg(void)
 	}
 #endif
 }
+
+/* ========== Battery refresh ==========
+ * Lazy: render path calls ui_refresh_battery(); ADC only fires when the
+ * cached reading is older than UI_BATT_REFRESH_MS. Telemetry / stats paths
+ * read fresh directly via their own callbacks — this gate only governs the
+ * local display. */
+#define UI_BATT_REFRESH_MS  30000
+
+static uint16_t (*s_batt_provider)(void);
+static uint32_t s_batt_last_read_ms;
+static bool s_batt_ever_read;
+
+void ui_set_battery_provider(uint16_t (*provider)(void))
+{
+	s_batt_provider = provider;
+}
+
+void ui_refresh_battery(void)
+{
+	if (!s_batt_provider) {
+		return;
+	}
+	uint32_t now = k_uptime_get_32();
+	if (s_batt_ever_read && (now - s_batt_last_read_ms) < UI_BATT_REFRESH_MS) {
+		return;
+	}
+	ui_set_battery(s_batt_provider(), 0);
+	s_batt_last_read_ms = k_uptime_get_32();
+	s_batt_ever_read = true;
+}

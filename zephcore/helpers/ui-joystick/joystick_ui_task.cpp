@@ -483,6 +483,7 @@ do_render:
 		} else
 #endif
 		{
+			ui_refresh_battery();
 			_display.startFrame();
 			int delay_ms;
 			if (_locked) {
