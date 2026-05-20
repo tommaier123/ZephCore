@@ -276,6 +276,11 @@ static void gps_fix_callback(double lat, double lon, int64_t utc_time)
 #ifdef ZEPHCORE_LORA
 static mesh::ZephyrBoard zephyr_board;
 
+static uint16_t get_battery_mv(void)
+{
+	return zephyr_board.getBattMilliVolts();
+}
+
 /* Radio is constructed with no prefs pointer; main() binds it to
  * repeater_mesh._prefs via setPrefs() before repeater_mesh.begin(). */
 
@@ -364,15 +369,9 @@ static void repeater_event_loop(void)
 					lora_radio.getNoiseFloor());
 			}
 
-			/* Battery every ~60s (12 × 5s housekeeping) */
-			static uint8_t batt_counter;
-			if (++batt_counter >= 12) {
-				batt_counter = 0;
-				ui_set_battery(zephyr_board.getBattMilliVolts(), 0);
-			}
+			/* Battery is now refreshed lazily from ui_pages_render() with
+			 * a 30 s freshness guard — no periodic ADC fire here. */
 #endif
-
-			ui_refresh_display();
 		}
 	}
 }
@@ -506,6 +505,7 @@ int main(void)
 		prefs->cr,
 		prefs->tx_power_dbm,
 		lora_radio.getNoiseFloor());
+	ui_set_battery_provider(get_battery_mv);
 	ui_set_battery(zephyr_board.getBattMilliVolts(), 0);
 	ui_set_gps_available(gps_is_available());
 

@@ -116,8 +116,6 @@ void ui_clear_recent(void);
 /**
  * Update sensor data for display.
  */
-void ui_set_sensor_data(int16_t temp_c10, uint32_t pressure_pa,
-			uint16_t humidity_rh10, uint16_t light_lux);
 
 /**
  * Set whether GPS hardware was detected at boot.
@@ -164,9 +162,17 @@ void ui_set_heartbeat_led(bool enabled);
 void ui_set_offgrid_mode(bool enabled);
 
 /**
- * Trigger a display refresh (for periodic updates from housekeeping).
+ * Register a battery-voltage provider used by ui_refresh_battery().
+ * provider() must return millivolts (0 if no battery hardware).
  */
-void ui_refresh_display(void);
+void ui_set_battery_provider(uint16_t (*provider)(void));
+
+/**
+ * Lazy battery refresh: re-read the ADC only if cached value is stale.
+ * Called from the page render path so the ADC fires at most once per
+ * 30 s and only when the display is actually being drawn.
+ */
+void ui_refresh_battery(void);
 
 #ifdef __cplusplus
 }

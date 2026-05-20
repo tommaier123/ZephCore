@@ -603,6 +603,7 @@ int main(void)
 	companion_mesh.setWriteFrameCallback(write_frame);
 	companion_mesh.setPushCallback(push_callback);
 	companion_mesh.setBatteryCallback(get_battery_mv);
+	ui_set_battery_provider(get_battery_mv);
 	companion_mesh.setRadioReconfigureCallback(radio_reconfigure);
 	companion_mesh.setPinChangeCallback([](uint32_t new_pin) {
 		zephcore_ble_set_passkey(new_pin);

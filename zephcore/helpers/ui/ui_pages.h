@@ -86,12 +86,6 @@ struct ui_state {
 	/* LEDs page */
 	bool     leds_disabled;    /* true = LEDs off */
 
-	/* Sensors page */
-	int16_t  temperature_c10;  /* temp in 0.1°C */
-	uint32_t pressure_pa;      /* pressure in Pa */
-	uint16_t humidity_rh10;    /* humidity in 0.1% RH */
-	uint16_t light_lux;
-
 	/* Current page */
 	enum ui_page current_page;
 

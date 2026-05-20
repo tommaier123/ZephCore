@@ -15,7 +15,10 @@
  */
 
 #include "ui_pages.h"
+#include "ui_task.h"
 #include "display.h"
+
+#include <ZephyrSensorManager.h>
 
 #include <zephyr/kernel.h>
 #include <stdio.h>
@@ -547,34 +550,31 @@ static void render_sensors(void)
 	char buf[24];
 	int y = CONTENT_Y;
 
-	/* Temperature */
-	if (state.temperature_c10 != 0) {
+	/* Lazy read: only fetch sensors when the user is actually looking at
+	 * this page.  Render is event-driven (schedule_render only on real UI
+	 * events), so this never fires periodically when idle. */
+	struct env_data edata;
+	bool have_env = env_sensors_available() && env_sensors_read(&edata) == 0;
+
+	if (have_env && edata.has_temperature) {
+		int16_t t10 = (int16_t)(edata.temperature_c * 10);
 		snprintf(buf, sizeof(buf), "Temp: %d.%d C",
-			 state.temperature_c10 / 10,
-			 abs(state.temperature_c10 % 10));
+			 t10 / 10, abs(t10 % 10));
 		mc_display_text(0, y, buf, false);
 		y += LINE_H;
 	}
 
-	/* Pressure */
-	if (state.pressure_pa != 0) {
+	if (have_env && edata.has_pressure) {
 		snprintf(buf, sizeof(buf), "Press: %u hPa",
-			 (unsigned)(state.pressure_pa / 100));
+			 (unsigned)edata.pressure_hpa);
 		mc_display_text(0, y, buf, false);
 		y += LINE_H;
 	}
 
-	/* Humidity */
-	if (state.humidity_rh10 != 0) {
+	if (have_env && edata.has_humidity) {
+		uint16_t h10 = (uint16_t)(edata.humidity_pct * 10);
 		snprintf(buf, sizeof(buf), "Humid: %u.%u%%",
-			 state.humidity_rh10 / 10, state.humidity_rh10 % 10);
-		mc_display_text(0, y, buf, false);
-		y += LINE_H;
-	}
-
-	/* Light */
-	if (state.light_lux != 0) {
-		snprintf(buf, sizeof(buf), "Light: %u lux", state.light_lux);
+			 h10 / 10, h10 % 10);
 		mc_display_text(0, y, buf, false);
 		y += LINE_H;
 	}
@@ -718,6 +718,11 @@ struct ui_state *ui_pages_get_state(void)
 
 void ui_pages_render(void)
 {
+	/* Refresh battery lazily — ADC only fires when the cached reading is
+	 * stale (≥30 s).  Render is event-driven, so during idle this never
+	 * runs.  Telemetry / stats paths bypass the cache entirely. */
+	ui_refresh_battery();
+
 	mc_display_clear();
 	render_top_bar();
 	render_page_indicator();

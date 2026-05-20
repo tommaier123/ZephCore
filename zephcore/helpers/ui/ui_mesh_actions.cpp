@@ -231,13 +231,8 @@ extern "C" void mesh_housekeeping_ui_refresh(void)
 		return;
 	}
 
-	/* Battery voltage changes slowly — read every ~60s (12 × 5s housekeeping)
-	 * instead of every 5s. Saves power (regulator toggle + ADC) and log noise. */
-	static uint8_t batt_counter;
-	if (++batt_counter >= 12) {
-		batt_counter = 0;
-		ui_set_battery(s_board->getBattMilliVolts(), 0);
-	}
+	/* Battery is now refreshed lazily from ui_pages_render() with a 30 s
+	 * freshness guard — no periodic ADC fire here. */
 
 	/* Update top bar clock from RTC */
 	ui_set_clock(s_rtc_clock->getCurrentTime());
@@ -292,22 +287,6 @@ extern "C" void mesh_housekeeping_ui_refresh(void)
 		}
 	}
 
-	/* Read environment sensors if available */
-	if (env_sensors_available()) {
-		struct env_data edata;
-
-		if (env_sensors_read(&edata) == 0) {
-			ui_set_sensor_data(
-				edata.has_temperature ? (int16_t)(edata.temperature_c * 10) : 0,
-				edata.has_pressure ? (uint32_t)(edata.pressure_hpa * 100) : 0,
-				edata.has_humidity ? (uint16_t)(edata.humidity_pct * 10) : 0,
-				0);
-		}
-	}
-
 	/* Update offline queue message count */
 	ui_set_msg_count(s_mesh->getOfflineQueueCount());
-
-	/* Trigger display refresh */
-	ui_refresh_display();
 }

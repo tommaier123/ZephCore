@@ -1065,12 +1065,43 @@ void ui_set_gps_data(bool has_fix, uint8_t sats,
 	s->gps_alt_mm = alt_mm;
 }
 
+/* Lazy battery refresh: render path calls ui_refresh_battery(); we only hit
+ * the ADC if the cached value is older than UI_BATT_REFRESH_MS.  Telemetry /
+ * stats paths bypass this and read fresh directly via _batt_cb, so over-the-
+ * air consumers are unaffected — this gate only governs the local display. */
+#define UI_BATT_REFRESH_MS  30000
+
+static uint16_t (*s_batt_provider)(void);
+static uint32_t s_batt_last_read_ms;
+static bool s_batt_ever_read;
+
 void ui_set_battery(uint16_t mv, uint8_t pct)
 {
 	struct ui_state *s = get_state();
 
 	s->battery_mv = mv;
 	s->battery_pct = pct;
+	/* Treat any explicit setter call as a fresh read so the lazy guard
+	 * doesn't immediately re-fire the ADC. */
+	s_batt_last_read_ms = k_uptime_get_32();
+	s_batt_ever_read = true;
+}
+
+void ui_set_battery_provider(uint16_t (*provider)(void))
+{
+	s_batt_provider = provider;
+}
+
+void ui_refresh_battery(void)
+{
+	if (!s_batt_provider) {
+		return;
+	}
+	uint32_t now = k_uptime_get_32();
+	if (s_batt_ever_read && (now - s_batt_last_read_ms) < UI_BATT_REFRESH_MS) {
+		return;
+	}
+	ui_set_battery(s_batt_provider(), 0);
 }
 
 void ui_set_clock(uint32_t epoch)
@@ -1125,17 +1156,6 @@ void ui_set_node_name(const char *name)
 #ifdef CONFIG_ZEPHCORE_UI_DISPLAY
 	ui_pages_set_node_name(name);
 #endif
-}
-
-void ui_set_sensor_data(int16_t temp_c10, uint32_t pressure_pa,
-			uint16_t humidity_rh10, uint16_t light_lux)
-{
-	struct ui_state *s = get_state();
-
-	s->temperature_c10 = temp_c10;
-	s->pressure_pa = pressure_pa;
-	s->humidity_rh10 = humidity_rh10;
-	s->light_lux = light_lux;
 }
 
 void ui_set_gps_available(bool available)
@@ -1204,23 +1224,3 @@ void ui_set_heartbeat_led(bool enabled)
 #endif
 }
 
-void ui_refresh_display(void)
-{
-	if (!ui_initialized) {
-		return;
-	}
-
-#ifdef CONFIG_ZEPHCORE_UI_DISPLAY
-	/* EPD displays: skip periodic housekeeping renders.
-	 * Each full e-paper refresh takes ~2s and causes visible flashing.
-	 * All meaningful events (messages, BLE, GPS fix, button presses)
-	 * already trigger renders via their own ui_set_*() → schedule_render().
-	 * Housekeeping just updates slow-changing data (clock, contact ages)
-	 * which will appear on the next event-driven render. */
-	if (mc_display_is_epd()) {
-		return;
-	}
-
-	schedule_render();
-#endif
-}
