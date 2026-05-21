@@ -45,6 +45,20 @@ ContactsScreen::ContactsScreen(JoystickUITask *task, mesh::RTCClock *rtc)
 {
 	_active_contact = ContactInfo{};
 	memset(_editpath_hexbuf, 0, sizeof(_editpath_hexbuf));
+	k_timer_init(&_ping_timeout_timer, pingTimeoutCb, NULL);
+	k_timer_user_data_set(&_ping_timeout_timer, this);
+}
+
+void ContactsScreen::pingTimeoutCb(struct k_timer *t)
+{
+	/* ISR — just wake the main loop; render() handles the timeout. */
+	auto *self = static_cast<ContactsScreen *>(k_timer_user_data_get(t));
+	if (self && self->_task) self->_task->notify();
+}
+
+void ContactsScreen::onExit()
+{
+	k_timer_stop(&_ping_timeout_timer);
 }
 
 /* Filter helpers */
@@ -263,6 +277,13 @@ static void drawPingModal(JoystickDisplay &display,
 
 int ContactsScreen::render(JoystickDisplay &display)
 {
+	/* Ping timeout: timer fires when _ping_timeout_ms elapsed; mark timeout. */
+	if (_ping_sent_at > 0 && _ping_timeout_ms > 0 &&
+		(k_uptime_get_32() - _ping_sent_at) >= _ping_timeout_ms) {
+		_ping_sent_at = 0;
+		_ping_rtt_ms = UINT32_MAX;
+	}
+
 	if (_mode == CMODE_SUBMENU || _mode == CMODE_MSGVIEW) {
 		if (!refreshActiveContact()) {
 			_mode = CMODE_LIST;
@@ -690,6 +711,7 @@ void ContactsScreen::onPingResponse(int8_t snr_local, int8_t snr_remote, uint32_
 	_ping_rtt_ms = (rtt_ms == 0) ? 1 : rtt_ms;
 	_ping_sent_at = 0;
 	_ping_modal_active = true;
+	k_timer_stop(&_ping_timeout_timer);  /* got a response before timeout */
 	_task->forceRefresh();
 }
 
@@ -698,19 +720,10 @@ void ContactsScreen::onPacketSent()
 	/* RF TX just completed — start the ping timeout clock now. */
 	if (_ping_modal_active && _ping_sent_at == 0) {
 		_ping_sent_at = k_uptime_get_32();
-		_task->forceRefresh();
-	}
-}
-
-void ContactsScreen::poll()
-{
-	if (_ping_sent_at > 0 && _ping_timeout_ms > 0) {
-		uint32_t elapsed = k_uptime_get_32() - _ping_sent_at;
-		if (elapsed >= _ping_timeout_ms) {
-			_ping_sent_at = 0;
-			_ping_rtt_ms = UINT32_MAX;
-			_task->forceRefresh();
+		if (_ping_timeout_ms > 0) {
+			k_timer_start(&_ping_timeout_timer, K_MSEC(_ping_timeout_ms), K_NO_WAIT);
 		}
+		_task->forceRefresh();
 	}
 }
 
@@ -743,6 +756,42 @@ RepeaterAdminScreen::RepeaterAdminScreen(JoystickUITask *task, mesh::RTCClock *r
 	memset(_password, 0, sizeof(_password));
 	memset(_hist, 0, sizeof(_hist));
 	memset(_cmd_buf, 0, sizeof(_cmd_buf));
+	k_timer_init(&_timeout_timer, timeoutTimerCb, NULL);
+	k_timer_user_data_set(&_timeout_timer, this);
+}
+
+void RepeaterAdminScreen::timeoutTimerCb(struct k_timer *t)
+{
+	/* ISR — wake main loop; render() detects elapsed and dispatches to onTimeout(). */
+	auto *self = static_cast<RepeaterAdminScreen *>(k_timer_user_data_get(t));
+	if (self && self->_task) self->_task->notify();
+}
+
+void RepeaterAdminScreen::onExit()
+{
+	k_timer_stop(&_timeout_timer);
+}
+
+void RepeaterAdminScreen::onTimeout()
+{
+	if (_state == STATE_LOGGING_IN) {
+		_awaiting_tx = false;
+		_state = STATE_PASSWORD_ENTRY;
+		_task->showAlert("Login timeout", 1500);
+	} else if ((_state == STATE_SUBMENU || _state == STATE_MAIN || _state == STATE_CMD_INPUT) &&
+			   _pending != PENDING_NONE) {
+		_awaiting_tx = false;
+		if (_hist_count > 0) {
+			CmdEntry &newest = histAt(_hist_count - 1);
+			if (!newest.has_resp) {
+				snprintf(newest.resp, sizeof(newest.resp), "(no response)");
+				newest.has_resp = true;
+			}
+		}
+		_pending = PENDING_NONE;
+		_task->clearAdminReqTag();
+	}
+	_last_sent_at = 0;  /* prevent re-fire from the render() elapsed-check */
 }
 
 /* ===== openForContact ===== */
@@ -1010,6 +1059,7 @@ void RepeaterAdminScreen::onReqResponse(const uint8_t *pub_key_prefix,
 	}
 	_pending = PENDING_NONE;
 	_task->clearAdminReqTag();
+	k_timer_stop(&_timeout_timer);
 }
 
 /* ===== sendCLI ===== */
@@ -1039,6 +1089,8 @@ bool RepeaterAdminScreen::sendCLI(const char *cmd)
 		uint32_t rt = est_timeout * 2 + 3000;
 		if (rt > _cmd_timeout_ms) _cmd_timeout_ms = rt;
 	}
+	k_timer_stop(&_timeout_timer);
+	k_timer_start(&_timeout_timer, K_MSEC(_cmd_timeout_ms), K_NO_WAIT);
 	return true;
 }
 
@@ -1047,6 +1099,7 @@ bool RepeaterAdminScreen::sendCLI(const char *cmd)
 void RepeaterAdminScreen::onLoginResult(bool success, uint8_t permissions, uint32_t server_time)
 {
 	if (_state != STATE_LOGGING_IN) return;
+	k_timer_stop(&_timeout_timer);
 	if (success) {
 		_permissions = permissions;
 		_server_time = server_time;
@@ -1065,6 +1118,7 @@ void RepeaterAdminScreen::onCliResponse(const char *text)
 {
 	if (!text || _pending != PENDING_CMD) return;
 	if (_state != STATE_MAIN && _state != STATE_CMD_INPUT && _state != STATE_SUBMENU) return;
+	k_timer_stop(&_timeout_timer);
 	if (_hist_count > 0) {
 		CmdEntry &newest = histAt(_hist_count - 1);
 		if (!newest.has_resp) {
@@ -1080,38 +1134,13 @@ void RepeaterAdminScreen::onCliResponse(const char *text)
 
 void RepeaterAdminScreen::onPacketSent()
 {
-	/* RF TX completed — reset timeout clock so LBT/queue delay is excluded */
+	/* RF TX completed — reset timeout clock so LBT/queue delay is excluded.
+	 * Restart the response-timeout timer with the full window from now. */
 	if (_awaiting_tx) {
 		_last_sent_at = k_uptime_get_32();
 		_awaiting_tx = false;
-	}
-}
-
-/* ===== poll ===== */
-
-void RepeaterAdminScreen::poll()
-{
-	if (_state == STATE_LOGGING_IN) {
-		if (_last_sent_at > 0 &&
-			k_uptime_get_32() - _last_sent_at > _cmd_timeout_ms) {
-			_awaiting_tx = false;
-			_state = STATE_PASSWORD_ENTRY;
-			_task->showAlert("Login timeout", 1500);
-		}
-	} else if ((_state == STATE_SUBMENU || _state == STATE_MAIN || _state == STATE_CMD_INPUT) && _pending != PENDING_NONE) {
-		if (_last_sent_at > 0 &&
-			k_uptime_get_32() - _last_sent_at > _cmd_timeout_ms) {
-			_awaiting_tx = false;
-			if (_hist_count > 0) {
-				CmdEntry &newest = histAt(_hist_count - 1);
-				if (!newest.has_resp) {
-					snprintf(newest.resp, sizeof(newest.resp), "(no response)");
-					newest.has_resp = true;
-				}
-			}
-			_pending = PENDING_NONE;
-			_task->clearAdminReqTag();
-		}
+		k_timer_stop(&_timeout_timer);
+		k_timer_start(&_timeout_timer, K_MSEC(_cmd_timeout_ms), K_NO_WAIT);
 	}
 }
 
@@ -1150,6 +1179,12 @@ static void renderAdminHeader(JoystickDisplay &display, const char *name, bool i
 
 int RepeaterAdminScreen::render(JoystickDisplay &display)
 {
+	/* Timeout check: timer fired (or any wakeup arrived past deadline). */
+	if (_last_sent_at > 0 &&
+		(k_uptime_get_32() - _last_sent_at) > _cmd_timeout_ms) {
+		onTimeout();
+	}
+
 	switch (_state) {
 
 	case STATE_PASSWORD_ENTRY: {
@@ -1363,6 +1398,8 @@ bool RepeaterAdminScreen::handleInput(char c)
 						uint32_t rt = est_timeout * 2 + 3000;
 						if (rt > _cmd_timeout_ms) _cmd_timeout_ms = rt;
 					}
+					k_timer_stop(&_timeout_timer);
+					k_timer_start(&_timeout_timer, K_MSEC(_cmd_timeout_ms), K_NO_WAIT);
 				} else {
 					_task->showAlert("Send failed", 1500);
 				}
@@ -1486,7 +1523,11 @@ bool RepeaterAdminScreen::handleInput(char c)
 				}
 				sent = sendBinaryReqHelper(_task, _contact_pubkey, req, req_len,
 										   _cmd_timeout_ms, _awaiting_tx, _last_sent_at);
-				if (sent) _pending = d.pending;
+				if (sent) {
+					_pending = d.pending;
+					k_timer_stop(&_timeout_timer);
+					k_timer_start(&_timeout_timer, K_MSEC(_cmd_timeout_ms), K_NO_WAIT);
+				}
 			}
 
 			if (!sent) {

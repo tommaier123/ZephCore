@@ -18,11 +18,6 @@ HomeScreen::HomeScreen(JoystickUITask *task, mesh::RTCClock *rtc)
 {
 }
 
-void HomeScreen::poll()
-{
-	/* Nothing periodic needed */
-}
-
 int HomeScreen::render(JoystickDisplay &display)
 {
 	static char unread_item[24];
@@ -219,13 +214,35 @@ bool HomeScreen::handleInput(char c)
 #endif
 
 SplashScreen::SplashScreen(JoystickUITask *task)
-	: _task(task)
+	: _task(task), _dismiss_after(0)
+{
+	k_timer_init(&_dismiss_timer, dismissTimerCb, NULL);
+	k_timer_user_data_set(&_dismiss_timer, this);
+}
+
+void SplashScreen::dismissTimerCb(struct k_timer *t)
+{
+	auto *self = static_cast<SplashScreen *>(k_timer_user_data_get(t));
+	if (self && self->_task) self->_task->notify();
+}
+
+void SplashScreen::onEnter()
 {
 	_dismiss_after = k_uptime_get_32() + BOOT_SCREEN_MILLIS;
+	k_timer_start(&_dismiss_timer, K_MSEC(BOOT_SCREEN_MILLIS), K_NO_WAIT);
+}
+
+void SplashScreen::onExit()
+{
+	k_timer_stop(&_dismiss_timer);
 }
 
 int SplashScreen::render(JoystickDisplay &display)
 {
+	if (k_uptime_get_32() >= _dismiss_after) {
+		_task->gotoHomeScreen();
+		return 0;
+	}
 	int cx = display.width() / 2;
 	display.setColor(JoystickDisplay::GREEN);
 	display.drawTextCentered(cx, display.height() / 4, "MeshCore");
@@ -233,11 +250,4 @@ int SplashScreen::render(JoystickDisplay &display)
 	display.drawTextCentered(cx, display.height() / 2 + 4, FIRMWARE_VERSION);
 	display.drawTextCentered(cx, display.height() / 2 + 4 + display.fontH() + 2, FIRMWARE_BUILD_DATE);
 	return 250;
-}
-
-void SplashScreen::poll()
-{
-	if (k_uptime_get_32() >= _dismiss_after) {
-		_task->gotoHomeScreen();
-	}
 }

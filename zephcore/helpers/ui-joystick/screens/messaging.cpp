@@ -26,6 +26,20 @@ UnreadScreen::UnreadScreen(JoystickUITask *task, mesh::RTCClock *rtc)
 		_entries[i].msg[0] = '\0';
 		_entries[i].read = true;
 	}
+	k_timer_init(&_preview_timer, previewTimerCb, NULL);
+	k_timer_user_data_set(&_preview_timer, this);
+}
+
+void UnreadScreen::previewTimerCb(struct k_timer *t)
+{
+	/* ISR — just wake main loop; render() detects the expiry and dismisses. */
+	auto *self = static_cast<UnreadScreen *>(k_timer_user_data_get(t));
+	if (self && self->_task) self->_task->notify();
+}
+
+void UnreadScreen::onExit()
+{
+	k_timer_stop(&_preview_timer);
 }
 
 void UnreadScreen::normalizeUnreadState()
@@ -64,7 +78,13 @@ void UnreadScreen::activatePreview(bool transient, uint32_t timeout_ms)
 	_list_scroll = 0;
 	if (_selected >= _visible_unread_count)
 		_selected = (_visible_unread_count > 0) ? _visible_unread_count - 1 : 0;
-	_preview_expiry = transient ? (k_uptime_get_32() + timeout_ms) : 0;
+	if (transient) {
+		_preview_expiry = k_uptime_get_32() + timeout_ms;
+		k_timer_start(&_preview_timer, K_MSEC(timeout_ms), K_NO_WAIT);
+	} else {
+		_preview_expiry = 0;
+		k_timer_stop(&_preview_timer);
+	}
 }
 
 const UnreadScreen::MsgEntry *UnreadScreen::getByListIndex(int idx) const
@@ -205,6 +225,15 @@ void UnreadScreen::markCurrentRead()
 
 int UnreadScreen::render(JoystickDisplay &display)
 {
+	/* Preview expiry: dismiss transient preview when its timer elapses. */
+	if (_transient_preview && _preview_expiry > 0 && k_uptime_get_32() >= _preview_expiry) {
+		_transient_preview = false;
+		_preview_expiry = 0;
+		_details = false;
+		_task->gotoHomeScreen();
+		return 0;
+	}
+
 	normalizeUnreadState();
 	if (_visible_unread_count == 0) {
 		renderScreenHeader(display, "Unread", 0, 0);
@@ -314,17 +343,6 @@ bool UnreadScreen::handleInput(char key)
 		return true;
 	}
 	return false;
-}
-
-void UnreadScreen::poll()
-{
-	normalizeUnreadState();
-	if (_transient_preview && _preview_expiry > 0 && k_uptime_get_32() >= _preview_expiry) {
-		_transient_preview = false;
-		_preview_expiry = 0;
-		_details = false;
-		_task->gotoHomeScreen();
-	}
 }
 
 ChannelsScreen::ChannelsScreen(JoystickUITask *task, mesh::RTCClock *rtc)

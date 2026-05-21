@@ -623,9 +623,30 @@ GPSSettingsScreen::GPSSettingsScreen(JoystickUITask *task, mesh::RTCClock *rtc)
 	  _last_sample_ms(0), _speed_kmh(0.0f), _heading_deg(0.0f),
 	  _heading_valid(false), _heading_hold_until(0)
 {
+	k_timer_init(&_sample_timer, sampleTimerCb, NULL);
+	k_timer_user_data_set(&_sample_timer, this);
 }
 
-void GPSSettingsScreen::poll()
+void GPSSettingsScreen::sampleTimerCb(struct k_timer *t)
+{
+	/* ISR context — just wake the main loop; sampling happens in
+	 * render() (main thread) via sampleGPS(). */
+	auto *self = static_cast<GPSSettingsScreen *>(k_timer_user_data_get(t));
+	if (self && self->_task) self->_task->notify();
+}
+
+void GPSSettingsScreen::onEnter()
+{
+	/* Sample GPS once per second while this screen is active. */
+	k_timer_start(&_sample_timer, K_MSEC(1000), K_MSEC(1000));
+}
+
+void GPSSettingsScreen::onExit()
+{
+	k_timer_stop(&_sample_timer);
+}
+
+void GPSSettingsScreen::sampleGPS()
 {
 	if (!_task->isGPSAvailable() || !_task->getGPSState()) return;
 	struct gps_position pos;
@@ -670,6 +691,8 @@ void GPSSettingsScreen::poll()
 
 int GPSSettingsScreen::render(JoystickDisplay &display)
 {
+	sampleGPS();  /* timer fires every 1s and wakes us here; sample now */
+
 	bool gps_enabled = _task->getGPSState();
 
 	char gps_state_line[24];

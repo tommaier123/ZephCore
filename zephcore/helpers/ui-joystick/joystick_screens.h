@@ -14,17 +14,28 @@
 #include <helpers/ChannelDetails.h>
 #include <mesh/Mesh.h>
 #include <stdint.h>
+#include <zephyr/kernel.h>
 #include "CompanionMesh.h"
 
 class JoystickUITask;
 
-/* ===== UIScreen base class ===== */
+/* ===== UIScreen base class =====
+ * Lifecycle:
+ *   onEnter() — called by JoystickUITask::setCurrScreen when this screen
+ *               becomes active. Start any per-screen k_timer here.
+ *   onExit()  — called when navigating away from this screen. Stop any
+ *               per-screen k_timer here so it can't fire on a stale screen.
+ *   render()  — draws the current state. Triggered by signals (key event,
+ *               mesh event, screen-owned timer fire), never polled.
+ *   handleInput() — receives one queued key character.
+ */
 class UIScreen {
 public:
 	virtual ~UIScreen() {}
 	virtual int render(JoystickDisplay &display) = 0;
 	virtual bool handleInput(char c) { (void)c; return false; }
-	virtual void poll() {}
+	virtual void onEnter() {}
+	virtual void onExit() {}
 };
 
 /* ===== Admin command size limits ===== */
@@ -39,10 +50,13 @@ public:
 class SplashScreen : public UIScreen {
 	JoystickUITask *_task;
 	uint32_t _dismiss_after;
+	struct k_timer _dismiss_timer;
+	static void dismissTimerCb(struct k_timer *t);
 public:
 	SplashScreen(JoystickUITask *task);
 	int render(JoystickDisplay &display) override;
-	void poll() override;
+	void onEnter() override;
+	void onExit() override;
 };
 
 /* ===== HomeScreen ===== */
@@ -52,7 +66,6 @@ class HomeScreen : public UIScreen {
 	int _selected;
 public:
 	HomeScreen(JoystickUITask *task, mesh::RTCClock *rtc);
-	void poll() override;
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
 };
@@ -89,11 +102,15 @@ class GPSSettingsScreen : public UIScreen {
 	float _speed_kmh, _heading_deg;
 	bool _heading_valid;
 	uint32_t _heading_hold_until;
+	struct k_timer _sample_timer;
+	static void sampleTimerCb(struct k_timer *t);
+	void sampleGPS();
 public:
 	GPSSettingsScreen(JoystickUITask *task, mesh::RTCClock *rtc);
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
+	void onEnter() override;
+	void onExit() override;
 };
 
 /* ===== SystemScreen ===== */
@@ -164,7 +181,7 @@ public:
 	RepeatersScreen(JoystickUITask *task, mesh::RTCClock *rtc);
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
+	void onEnter() override;
 };
 
 /* ===== ChannelsScreen ===== */
@@ -261,7 +278,6 @@ public:
 	StopwatchScreen(JoystickUITask *task);
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
 };
 
 /* ===== CountdownScreen ===== */
@@ -272,11 +288,13 @@ class CountdownScreen : public UIScreen {
 	int _set_seconds;
 	int _edit_field;
 	bool _alarmed;
+	struct k_timer _alarm_timer;
+	static void alarmTimerCb(struct k_timer *t);
 public:
 	CountdownScreen(JoystickUITask *task);
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
+	void onExit() override;
 };
 
 /* ===== SnakeScreen ===== */
@@ -288,16 +306,21 @@ class SnakeScreen : public UIScreen {
 	int8_t _snake_y[GRID_W * GRID_H];
 	int _snake_len;
 	int8_t _food_x, _food_y;
-	uint32_t _next_move;
 	int _score;
+	struct k_timer _tick_timer;
+	volatile bool _tick_due;  /* set in timer ISR, consumed in render */
+	static void tickTimerCb(struct k_timer *t);
 
 	void placeFood();
 	void reset();
+	void advanceGame();
+	void startTicking();
 public:
 	SnakeScreen(JoystickUITask *task);
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
+	void onEnter() override;
+	void onExit() override;
 };
 
 /* ===== DoomScreen ===== */
@@ -308,7 +331,7 @@ public:
 	DoomScreen(JoystickUITask *task);
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
+	void onEnter() override;
 };
 #endif
 
@@ -352,6 +375,8 @@ class ContactsScreen : public UIScreen {
 	int8_t _ping_snr_remote;	/* SNR of our ping as received by repeater, INT8_MIN if unknown */
 	uint32_t _ping_rtt_ms;		  /* RTT: 0=no result yet, UINT32_MAX=timeout, else ms */
 	bool _ping_modal_active;  /* modal overlay visible */
+	struct k_timer _ping_timeout_timer;
+	static void pingTimeoutCb(struct k_timer *t);
 
 	int clampStart(int contactCount) const;
 	int getFilteredContactCount() const;
@@ -366,7 +391,7 @@ public:
 	void onPacketSent();
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
+	void onExit() override;
 };
 
 /* ===== UnreadScreen ===== */
@@ -392,6 +417,8 @@ class UnreadScreen : public UIScreen {
 	int _detail_scroll;
 	bool _transient_preview;
 	uint32_t _preview_expiry;
+	struct k_timer _preview_timer;
+	static void previewTimerCb(struct k_timer *t);
 
 	void normalizeUnreadState();
 	const MsgEntry *getByListIndex(int idx) const;
@@ -414,7 +441,7 @@ public:
 						 uint32_t &out_ts, uint8_t *out_path = nullptr) const;
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
+	void onExit() override;
 };
 
 /* ===== RepeaterAdminScreen ===== */
@@ -432,9 +459,13 @@ public:
 	void onPacketSent();
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
-	void poll() override;
+	void onExit() override;
 
 private:
+	struct k_timer _timeout_timer;
+	static void timeoutTimerCb(struct k_timer *t);
+	void onTimeout();   /* called from main thread when _timeout_timer fires */
+
 	JoystickUITask *_task;
 	mesh::RTCClock *_rtc;
 	AdminState _state;

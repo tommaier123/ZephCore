@@ -257,7 +257,10 @@ void JoystickUITask::begin(BaseChatMesh *mesh, mesh::ZephyrRTCClock *rtc, NodePr
 /* ===== setCurrScreen / navigation ===== */
 void JoystickUITask::setCurrScreen(UIScreen *s)
 {
+	if (_curr == s) return;  /* no-op for re-entry */
+	if (_curr) _curr->onExit();
 	_curr = s;
+	if (_curr) _curr->onEnter();
 	_next_refresh = 0;
 }
 
@@ -490,11 +493,6 @@ void JoystickUITask::loop()
 			}
 			_next_refresh = now;
 		}
-	}
-
-	/* Poll current screen */
-	if (_curr) {
-		_curr->poll();
 	}
 
 do_render:

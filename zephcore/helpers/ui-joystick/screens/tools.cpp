@@ -83,8 +83,9 @@ RepeatersScreen::RepeatersScreen(JoystickUITask *task, mesh::RTCClock *rtc)
 	s_scan_until = 0; s_scan_sent = false;
 }
 
-void RepeatersScreen::poll()
+void RepeatersScreen::onEnter()
 {
+	/* One-shot discover per device boot — guarded by s_scan_sent. */
 	if (s_scan_sent) return;
 	s_scan_sent = true;
 	s_scan_until = k_uptime_get_32() + REPEATER_SCAN_WINDOW_MS;
@@ -264,21 +265,34 @@ CountdownScreen::CountdownScreen(JoystickUITask *task)
 	: _task(task), _running(false), _end_ms(0), _set_seconds(60),
 	  _edit_field(0), _alarmed(false)
 {
+	k_timer_init(&_alarm_timer, alarmTimerCb, NULL);
+	k_timer_user_data_set(&_alarm_timer, this);
 }
 
-void CountdownScreen::poll()
+void CountdownScreen::alarmTimerCb(struct k_timer *t)
 {
-	if (!_running) return;
-	if (k_uptime_get_32() >= _end_ms) {
+	/* ISR context — just signal refresh; render() detects the elapsed
+	 * deadline against _end_ms and fires the alarm UX in main thread. */
+	auto *self = static_cast<CountdownScreen *>(k_timer_user_data_get(t));
+	if (self && self->_task) self->_task->notify();
+}
+
+void CountdownScreen::onExit()
+{
+	k_timer_stop(&_alarm_timer);
+}
+
+int CountdownScreen::render(JoystickDisplay &display)
+{
+	/* Alarm path: timer fired (or any wakeup arrived after deadline);
+	 * fire alarm UX once and clear _running. */
+	if (_running && k_uptime_get_32() >= _end_ms) {
 		_running = false;
 		_alarmed = true;
 		_task->playCountdownAlarm();
 		_task->showAlert("Countdown done!", 1000);
 	}
-}
 
-int CountdownScreen::render(JoystickDisplay &display)
-{
 	renderScreenHeader(display, "Countdown", 0, 0);
 
 	int remaining = _set_seconds;
@@ -309,10 +323,12 @@ bool CountdownScreen::handleInput(char c)
 	if (c == KEY_ENTER) {
 		if (_running) {
 			_running = false;
+			k_timer_stop(&_alarm_timer);
 		} else {
 			_end_ms = k_uptime_get_32() + (uint32_t)_set_seconds * 1000UL;
 			_running = true;
 			_alarmed = false;
+			k_timer_start(&_alarm_timer, K_MSEC((uint32_t)_set_seconds * 1000UL), K_NO_WAIT);
 		}
 		return true;
 	}
@@ -333,6 +349,7 @@ bool CountdownScreen::handleInput(char c)
 		_alarmed = false;
 		_set_seconds = 60;
 		_end_ms = 0;
+		k_timer_stop(&_alarm_timer);
 		return true;
 	}
 	if (c == KEY_CANCEL || c == KEY_HOME) { _task->gotoToolsScreen(); return true; }
@@ -345,8 +362,6 @@ StopwatchScreen::StopwatchScreen(JoystickUITask *task)
 {
 	memset(_lap_times, 0, sizeof(_lap_times));
 }
-
-void StopwatchScreen::poll() { /* no autonomous action needed */ }
 
 int StopwatchScreen::render(JoystickDisplay &display)
 {
@@ -433,12 +448,38 @@ static int s_state = STATE_READY;
 
 SnakeScreen::SnakeScreen(JoystickUITask *task)
 	: _task(task), _snake_len(0),
-	  _food_x(0), _food_y(0),
-	  _next_move(0), _score(0)
+	  _food_x(0), _food_y(0), _score(0),
+	  _tick_due(false)
 {
 	memset(_snake_x, 0, sizeof(_snake_x));
 	memset(_snake_y, 0, sizeof(_snake_y));
+	k_timer_init(&_tick_timer, tickTimerCb, NULL);
+	k_timer_user_data_set(&_tick_timer, this);
 	reset();
+}
+
+void SnakeScreen::tickTimerCb(struct k_timer *t)
+{
+	auto *self = static_cast<SnakeScreen *>(k_timer_user_data_get(t));
+	if (!self) return;
+	self->_tick_due = true;
+	if (self->_task) self->_task->notify();
+}
+
+void SnakeScreen::startTicking()
+{
+	k_timer_start(&_tick_timer, K_MSEC(SNAKE_TICK_MS), K_MSEC(SNAKE_TICK_MS));
+}
+
+void SnakeScreen::onEnter()
+{
+	if (s_state == STATE_PLAYING) startTicking();
+}
+
+void SnakeScreen::onExit()
+{
+	k_timer_stop(&_tick_timer);
+	_tick_due = false;
 }
 
 void SnakeScreen::reset()
@@ -452,7 +493,7 @@ void SnakeScreen::reset()
 	s_ndir_x = 1; s_ndir_y = 0;
 	_score = 0;
 	s_state = STATE_READY;
-	_next_move = 0;
+	_tick_due = false;
 	placeFood();
 }
 
@@ -478,20 +519,17 @@ static bool headHitsBody(const int8_t *sx, const int8_t *sy, int len)
 	return false;
 }
 
-void SnakeScreen::poll()
+void SnakeScreen::advanceGame()
 {
-	if (s_state != STATE_PLAYING) return;
-	uint32_t now = k_uptime_get_32();
-	if (now < _next_move) return;
-	_next_move = now + SNAKE_TICK_MS;
-
 	s_dir_x = s_ndir_x; s_dir_y = s_ndir_y;
 
 	int8_t nx = _snake_x[0] + s_dir_x;
 	int8_t ny = _snake_y[0] + s_dir_y;
 
 	if (nx < 0 || ny < 0 || nx >= GRID_W || ny >= GRID_H) {
-		s_state = STATE_OVER; return;
+		s_state = STATE_OVER;
+		k_timer_stop(&_tick_timer);
+		return;
 	}
 
 	bool eat = (nx == _food_x && ny == _food_y);
@@ -504,13 +542,23 @@ void SnakeScreen::poll()
 	_snake_x[0] = nx; _snake_y[0] = ny;
 
 	if (headHitsBody(_snake_x, _snake_y, _snake_len)) {
-		s_state = STATE_OVER; return;
+		s_state = STATE_OVER;
+		k_timer_stop(&_tick_timer);
+		return;
 	}
 	if (eat) { _score++; placeFood(); }
 }
 
 int SnakeScreen::render(JoystickDisplay &display)
 {
+	/* Advance game on tick fire (set by k_timer ISR). */
+	if (_tick_due) {
+		_tick_due = false;
+		if (s_state == STATE_PLAYING) {
+			advanceGame();
+		}
+	}
+
 	char title[24];
 	snprintf(title, sizeof(title), "SNAKE Score:%d", _score);
 	display.setColor(JoystickDisplay::GREEN);
@@ -549,11 +597,14 @@ bool SnakeScreen::handleInput(char c)
 	if (c == KEY_RIGHT && s_dir_x == 0) { s_ndir_x =  1; s_ndir_y =  0; return true; }
 	if (c == KEY_ENTER) {
 		if (s_state == STATE_READY || s_state == STATE_OVER) {
-			reset(); s_state = STATE_PLAYING; _next_move = k_uptime_get_32() + SNAKE_TICK_MS;
+			reset(); s_state = STATE_PLAYING;
+			startTicking();
 		} else if (s_state == STATE_PLAYING) {
 			s_state = STATE_PAUSED;
+			k_timer_stop(&_tick_timer);
 		} else if (s_state == STATE_PAUSED) {
-			s_state = STATE_PLAYING; _next_move = k_uptime_get_32() + SNAKE_TICK_MS;
+			s_state = STATE_PLAYING;
+			startTicking();
 		}
 		return true;
 	}
@@ -566,7 +617,7 @@ bool SnakeScreen::handleInput(char c)
 
 DoomScreen::DoomScreen(JoystickUITask *task) : _task(task) {}
 
-void DoomScreen::poll()
+void DoomScreen::onEnter()
 {
 	if (!doom_game_is_running()) {
 		doom_game_start();
