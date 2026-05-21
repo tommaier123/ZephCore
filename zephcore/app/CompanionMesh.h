@@ -318,8 +318,10 @@ private:
 	uint32_t _pending_telemetry;
 	uint32_t _pending_discovery;
 	uint32_t _pending_req;
+#ifdef CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK
 	uint32_t _pending_joystick_ping_tag;  /* tag-based match, checked before pubkey-based _pending_status */
 	uint32_t _pending_joystick_admin_tag; /* same protection for admin binary requests */
+#endif
 
 	/* Lazy contacts/channels write - batches rapid updates */
 	int64_t _dirty_contacts_expiry;
@@ -346,12 +348,14 @@ private:
 		 * joystick ping is independent of BLE request state. */
 	}
 
+#ifdef CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK
 public:
 	void setJoystickPingTag(uint32_t tag)  { _pending_joystick_ping_tag = tag; }
 	void clearJoystickPingTag()            { _pending_joystick_ping_tag = 0; }
 	void setJoystickAdminTag(uint32_t tag) { _pending_joystick_admin_tag = tag; }
 	void clearJoystickAdminTag()           { _pending_joystick_admin_tag = 0; }
 private:
+#endif
 
 	bool writeFrame(const uint8_t *data, size_t len);
 	void sendPacketOk();

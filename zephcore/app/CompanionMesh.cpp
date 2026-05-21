@@ -195,8 +195,10 @@ CompanionMesh::CompanionMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mes
 	_pending_telemetry = 0;
 	_pending_discovery = 0;
 	_pending_req = 0;
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
 	_pending_joystick_ping_tag = 0;
 	_pending_joystick_admin_tag = 0;
+#endif
 	_pending_channel_head = 0;
 	_pending_channel_tail = 0;
 	_pending_channel_count = 0;
@@ -1077,7 +1079,7 @@ uint8_t CompanionMesh::onContactRequest(const ContactInfo &contact, uint32_t sen
 
 void CompanionMesh::logTx(mesh::Packet *, int)
 {
-#if ZEPHCORE_HAS_UI_TASK
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
 	ui_notify_packet_sent();
 #endif
 }
@@ -2428,8 +2430,9 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 				int result = sendLogin(*contact, password, est_timeout);
 				LOG_DBG("CMD_SEND_LOGIN: sendLogin returned %d, est_timeout=%u", result, est_timeout);
 				if (result != MSG_SEND_FAILED) {
-					clearPendingReqs();
-					memcpy(&_pending_login, contact->id.pub_key, 4);  // match in onContactResponse()
+					/* _pending_login was set by onLoginSent (BaseChatMesh::sendLogin hook);
+					 * clear the other pending fields manually — clearPendingReqs() would wipe it. */
+					_pending_status = _pending_telemetry = _pending_discovery = _pending_req = 0;
 					LOG_DBG("CMD_SEND_LOGIN: _pending_login set to %08x", _pending_login);
 					uint8_t rsp[10];
 					rsp[0] = PACKET_SENT;
