@@ -491,6 +491,20 @@ void SnakeScreen::onExit()
 	_tick_due = false;
 }
 
+void SnakeScreen::onDisplayOff()
+{
+	/* Pause the game-tick timer while the screen is off — no point burning
+	 * wakes to advance a snake nobody can see. The game state is preserved;
+	 * we'll resume on onDisplayOn(). */
+	k_timer_stop(&_tick_timer);
+	_tick_due = false;
+}
+
+void SnakeScreen::onDisplayOn()
+{
+	if (s_state == STATE_PLAYING) startTicking();
+}
+
 void SnakeScreen::reset()
 {
 	int cx = GRID_W / 2, cy = GRID_H / 2;

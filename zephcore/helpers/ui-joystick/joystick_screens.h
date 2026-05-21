@@ -21,13 +21,20 @@ class JoystickUITask;
 
 /* ===== UIScreen base class =====
  * Lifecycle:
- *   onEnter() — called by JoystickUITask::setCurrScreen when this screen
- *               becomes active. Start any per-screen k_timer here.
- *   onExit()  — called when navigating away from this screen. Stop any
- *               per-screen k_timer here so it can't fire on a stale screen.
- *   render()  — draws the current state. Triggered by signals (key event,
- *               mesh event, screen-owned timer fire), never polled.
- *   handleInput() — receives one queued key character.
+ *   onEnter()      — called by setCurrScreen when this screen becomes
+ *                    active. Start any per-screen k_timer here.
+ *   onExit()       — called when navigating away. Stop any per-screen
+ *                    k_timer here so it can't fire on a stale screen.
+ *   onDisplayOff() — called when the display turns off while this screen
+ *                    is active. Pause periodic timers whose work is
+ *                    invisible while the screen is off (e.g. game ticks,
+ *                    GPS sampling). Keep one-shot timers running if their
+ *                    purpose is to fire while idle (alarms, timeouts).
+ *   onDisplayOn()  — counterpart of onDisplayOff; resume what you paused.
+ *   render()       — draws the current state. Triggered by signals (key
+ *                    event, mesh event, screen-owned timer fire), never
+ *                    polled.
+ *   handleInput()  — receives one queued key character.
  */
 class UIScreen {
 public:
@@ -36,6 +43,8 @@ public:
 	virtual bool handleInput(char c) { (void)c; return false; }
 	virtual void onEnter() {}
 	virtual void onExit() {}
+	virtual void onDisplayOff() {}
+	virtual void onDisplayOn() {}
 };
 
 /* ===== Admin command size limits ===== */
@@ -111,6 +120,8 @@ public:
 	bool handleInput(char c) override;
 	void onEnter() override;
 	void onExit() override;
+	void onDisplayOff() override;
+	void onDisplayOn() override;
 };
 
 /* ===== SystemScreen ===== */
@@ -323,6 +334,8 @@ public:
 	bool handleInput(char c) override;
 	void onEnter() override;
 	void onExit() override;
+	void onDisplayOff() override;
+	void onDisplayOn() override;
 };
 
 /* ===== DoomScreen ===== */

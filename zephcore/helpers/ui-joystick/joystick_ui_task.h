@@ -229,6 +229,8 @@ private:
 	struct k_timer _lock_timer;    /* one-shot, fires LOCK_AFTER_MS after last activity */
 	static void lockTimerCb(struct k_timer *t);
 	void scheduleLockTimer();
+	bool _was_display_on;          /* previous display state for transition detection */
+	void onDisplayStateChanged();  /* dispatches onDisplayOff/On to _curr on transition */
 
 	/* State */
 	uint16_t _cached_batt_mv;

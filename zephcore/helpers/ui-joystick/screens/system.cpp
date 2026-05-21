@@ -646,6 +646,18 @@ void GPSSettingsScreen::onExit()
 	k_timer_stop(&_sample_timer);
 }
 
+void GPSSettingsScreen::onDisplayOff()
+{
+	/* Pause the 1 Hz GPS sample loop while the screen is off — the user
+	 * can't see speed/heading and we're just burning ADC + math. */
+	k_timer_stop(&_sample_timer);
+}
+
+void GPSSettingsScreen::onDisplayOn()
+{
+	k_timer_start(&_sample_timer, K_MSEC(1000), K_MSEC(1000));
+}
+
 void GPSSettingsScreen::sampleGPS()
 {
 	if (!_task->isGPSAvailable() || !_task->getGPSState()) return;

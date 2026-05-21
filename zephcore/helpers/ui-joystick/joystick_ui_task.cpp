@@ -72,6 +72,17 @@ void JoystickUITask::scheduleLockTimer()
 	k_timer_start(&_lock_timer, K_MSEC(LOCK_AFTER_MS), K_NO_WAIT);
 }
 
+void JoystickUITask::onDisplayStateChanged()
+{
+	bool is_on = _display.isOn();
+	if (is_on == _was_display_on) return;
+	if (_curr) {
+		if (is_on) _curr->onDisplayOn();
+		else       _curr->onDisplayOff();
+	}
+	_was_display_on = is_on;
+}
+
 static bool joystick_queue_initialized;
 
 #define ENTER_LONG_PRESS_MS  500
@@ -185,7 +196,7 @@ JoystickUITask::JoystickUITask()
 	  _doom(nullptr),
 #endif
 	  _repeater_admin(nullptr), _curr(nullptr),
-	  _next_refresh(0), _screen_off_ms(AUTO_OFF_MILLIS),
+	  _next_refresh(0), _screen_off_ms(AUTO_OFF_MILLIS), _was_display_on(false),
 	  _cached_batt_mv(0), _battery_display_mode(0),
 	  _brightness(100), _wake_on_msg(true), _ble_connected(false),
 	  _ble_enabled(true), _msgcount(0), _noise_floor(-120),
@@ -461,6 +472,11 @@ void JoystickUITask::loop()
 	 * _locked = true and signals refresh). Both are fully event-driven; no
 	 * deadline checks needed here. */
 
+	/* Catch display state transitions (mainly display.c's auto-off, which
+	 * happens behind our back) so the current screen can pause/resume any
+	 * periodic timers it owns. */
+	onDisplayStateChanged();
+
 	/* Dequeue key events */
 	char key = 0;
 	if (k_msgq_get(&_key_queue, &key, K_NO_WAIT) == 0) {
@@ -470,6 +486,10 @@ void JoystickUITask::loop()
 			 * for the lock screen, which the user is about to see. */
 			ui_invalidate_battery_cache();
 			_display.turnOn();  /* mc_display_on() already calls mc_display_reset_auto_off() */
+			onDisplayStateChanged();  /* dispatch onDisplayOn now, no one-frame delay */
+			/* Push the lock deadline forward so a wake-press at the tail end
+			 * of the lock window doesn't get re-locked immediately. */
+			if (!_locked) scheduleLockTimer();
 			_next_refresh = 0;
 			goto do_render;
 		}
