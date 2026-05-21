@@ -531,6 +531,29 @@ static inline void renderT9Keypad(JoystickDisplay &display, const char * const *
 	}
 }
 
+/* ===== buildChannelReplyPrefix ===== */
+/* Builds "@[SenderName] " from a "SenderName: text" channel message.
+ * Returns false for outbound messages (OUT_PATH_SENT) or if no ": " separator
+ * is found. out_buf must be at least (name_len + 5) bytes; 38 is always safe. */
+static inline bool buildChannelReplyPrefix(
+	const char *msg, uint8_t path_len,
+	char *out_buf, size_t out_size
+){
+	if (path_len == OUT_PATH_SENT) return false;
+	const char *sep = strstr(msg, ": ");
+	if (!sep || sep == msg) return false;
+	size_t nlen = (size_t)(sep - msg);
+	if (nlen > 32) nlen = 32;
+	if (out_size < nlen + 5) return false; /* '@' '[' name ']' ' ' '\0' */
+	out_buf[0] = '@';
+	out_buf[1] = '[';
+	memcpy(out_buf + 2, msg, nlen);
+	out_buf[2 + nlen] = ']';
+	out_buf[3 + nlen] = ' ';
+	out_buf[4 + nlen] = '\0';
+	return true;
+}
+
 /* Helper: leave compose input and return to appropriate screen */
 static inline void leaveComposeInput(class JoystickUITask *task);
 

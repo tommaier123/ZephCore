@@ -621,7 +621,8 @@ GPSSettingsScreen::GPSSettingsScreen(JoystickUITask *task, mesh::RTCClock *rtc)
 	: _task(task), _rtc(rtc), _selected(0),
 	  _have_prev_fix(false), _prev_lat_e6(0), _prev_lon_e6(0),
 	  _last_sample_ms(0), _speed_kmh(0.0f), _heading_deg(0.0f),
-	  _heading_valid(false), _heading_hold_until(0)
+	  _heading_valid(false), _heading_hold_until(0),
+	  _show_alt(false), _alt_cycle_ms(0)
 {
 	k_timer_init(&_sample_timer, sampleTimerCb, NULL);
 	k_timer_user_data_set(&_sample_timer, this);
@@ -660,12 +661,20 @@ void GPSSettingsScreen::onDisplayOn()
 
 void GPSSettingsScreen::sampleGPS()
 {
+	/* Cycle between position and altitude view every 4 seconds */
+	uint32_t now = k_uptime_get_32();
+	if (_alt_cycle_ms == 0) {
+		_alt_cycle_ms = now + GPS_HEADING_HOLD_MS;
+	} else if (now >= _alt_cycle_ms) {
+		_show_alt = !_show_alt;
+		_alt_cycle_ms = now + GPS_HEADING_HOLD_MS;
+	}
+
 	if (!_task->isGPSAvailable() || !_task->getGPSState()) return;
 	struct gps_position pos;
 	gps_get_position(&pos);
 	if (!pos.valid) return;
 
-	uint32_t now = k_uptime_get_32();
 	if (now - _last_sample_ms < 1000) return;
 
 	int32_t lat = (int32_t)(pos.latitude_ndeg  / 1000LL);
@@ -737,11 +746,16 @@ int GPSSettingsScreen::render(JoystickDisplay &display)
 		snprintf(satellites_line, sizeof(satellites_line), "Sat: %d (%s)", sat, fix_str);
 
 		if (has_fix) {
-			double lat = (double)(pos.latitude_ndeg  / 1000000LL) / 1000.0;
-			double lon = (double)(pos.longitude_ndeg / 1000000LL) / 1000.0;
-			snprintf(lat_lon_line, sizeof(lat_lon_line), "%.4f%c %.4f%c",
-					 fabs(lat), lat >= 0 ? 'N' : 'S',
-					 fabs(lon), lon >= 0 ? 'E' : 'W');
+			if (_show_alt) {
+				float alt_m = (float)pos.altitude_mm / 1000.0f;
+				snprintf(lat_lon_line, sizeof(lat_lon_line), "Alt: %.1f m", (double)alt_m);
+			} else {
+				double lat = (double)(pos.latitude_ndeg  / 1000000LL) / 1000.0;
+				double lon = (double)(pos.longitude_ndeg / 1000000LL) / 1000.0;
+				snprintf(lat_lon_line, sizeof(lat_lon_line), "%.4f%c %.4f%c",
+						 fabs(lat), lat >= 0 ? 'N' : 'S',
+						 fabs(lon), lon >= 0 ? 'E' : 'W');
+			}
 
 			if (_heading_valid) {
 				snprintf(speed_line, sizeof(speed_line), "%.1f km/h | %s %.0f",

@@ -51,7 +51,6 @@ public:
 	/* Called from CompanionMesh callbacks (mesh thread context) */
 	void newMsg(uint8_t path_len, const char *from_name, const char *text, int msgcount);
 	void newChannelMsg(const char *channel_name, const char *text, uint32_t ts, uint8_t path_len);
-	void msgRead(int msgcount);
 	void notify(); /* BLE connect/disconnect, ACK, etc. */
 
 	/* Alert overlay */
@@ -70,6 +69,7 @@ public:
 	void gotoRepeatersScreen();
 	void gotoChannelsScreen();
 	void gotoT9InputScreen();
+	void gotoT9InputScreenWithPrefix(const char *prefix);
 	void gotoRenameNodeScreen();
 	void gotoBLECodeScreen();
 	void gotoStatsScreen();

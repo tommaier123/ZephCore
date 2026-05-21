@@ -147,6 +147,9 @@ static bool adv_stop_for_interval_change;
  * (SerialBLEInterface.cpp:343). */
 static bool adv_running;
 
+/* Administrative BLE state */
+static bool ble_enabled = true;
+
 
 /* Runtime BLE passkey */
 static uint32_t ble_passkey = CONFIG_ZEPHCORE_BLE_PASSKEY;
@@ -781,6 +784,10 @@ static void adv_slow_work_fn(struct k_work *work)
 
 static void start_adv(void)
 {
+	if (!ble_enabled) {
+		return;
+	}
+
 	uint16_t interval = fast_adv_active ? BT_ADV_FAST_INTERVAL : BT_ADV_INTERVAL;
 
 	struct bt_le_adv_param adv_param = {
@@ -908,6 +915,7 @@ size_t zephcore_ble_send(const uint8_t *data, uint16_t len)
 
 void zephcore_ble_set_enabled(bool enable)
 {
+	ble_enabled = enable;
 	if (!enable) {
 		/* Disconnect current connection if any */
 		if (current_conn) {
@@ -917,6 +925,10 @@ void zephcore_ble_set_enabled(bool enable)
 		/* Stop advertising */
 		bt_le_adv_stop();
 		adv_running = false;
+
+		/* No future fast->slow transition needed */
+		k_work_cancel_delayable(&adv_slow_work);
+
 		LOG_INF("BLE disabled");
 	} else {
 		/* Re-enable advertising — start fast window */
@@ -925,6 +937,10 @@ void zephcore_ble_set_enabled(bool enable)
 		start_adv();
 		LOG_INF("BLE enabled");
 	}
+}
+bool zephcore_ble_is_enabled(void)
+{
+    return ble_enabled;
 }
 
 bool zephcore_ble_is_active(void)

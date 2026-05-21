@@ -307,22 +307,22 @@ bool UnreadScreen::handleInput(char key)
 			return true;
 		}
 		if (key == KEY_ENTER_LONG) {
-			/* Reply to channel message if applicable */
-			if (entry && strchr(entry->msg, '#') != nullptr) {
-				const char *hash_pos = strchr(entry->msg, '#');
-				char channel_name[32] = {};
-				const char *space_after = hash_pos ? strchr(hash_pos, ' ') : nullptr;
-				if (space_after) {
-					size_t len = space_after - hash_pos;
-					if (len < sizeof(channel_name)) {
-						memcpy(channel_name, hash_pos, len);
-						channel_name[len] = '\0';
-					}
-				}
-				if (channel_name[0]) {
-					_task->setComposeChannel(-1, channel_name);
+			if (!entry) return true;
+			/* Determine if this is a channel message by checking origin for '#' */
+			char origin_sender[32] = {};
+			uint8_t path_len_origin = OUT_PATH_UNKNOWN;
+			parseMessageOriginAndPath(entry->origin, origin_sender, sizeof(origin_sender),
+					&path_len_origin);
+			if (origin_sender[0] == '#') {
+				/* Channel message: channel name follows '#' in origin_sender */
+				const char *ch_name = origin_sender + 1;
+				_task->setComposeChannel(-1, ch_name);
+				char at_buf[38];
+				if (buildChannelReplyPrefix(entry->msg, path_len_origin,
+						at_buf, sizeof(at_buf))) {
+					_task->gotoT9InputScreenWithPrefix(at_buf);
+				} else {
 					_task->gotoT9InputScreen();
-					return true;
 				}
 			}
 			return true;
@@ -479,8 +479,9 @@ bool ChannelsScreen::handleInput(char key)
 		if (_msg_details) {
 			const char *msg = "";
 			uint32_t ts = 0;
+			uint8_t path_len = OUT_PATH_UNKNOWN;
 			int max_scroll = 0;
-			if (_task->getChannelPreviewFor(_msg_channel, _msg_scroll, msg, ts)) {
+			if (_task->getChannelPreviewFor(_msg_channel, _msg_scroll, msg, ts, &path_len)) {
 				max_scroll = getMessageDetailMaxScrollSanitized(
 					_task->getDisplay(), msg, 20, 5, 5);
 			}
@@ -492,7 +493,13 @@ bool ChannelsScreen::handleInput(char key)
 			}
 			if (key == KEY_ENTER_LONG) {
 				_task->setComposeChannel(_msg_channel_idx, _msg_channel);
-				_task->gotoT9InputScreen();
+				char at_buf[38];
+				if (buildChannelReplyPrefix(msg, path_len,
+						at_buf, sizeof(at_buf))) {
+					_task->gotoT9InputScreenWithPrefix(at_buf);
+				} else {
+					_task->gotoT9InputScreen();
+				}
 				return true;
 			}
 			return false;

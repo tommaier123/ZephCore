@@ -43,6 +43,9 @@ size_t zephcore_ble_send(const uint8_t *data, uint16_t len);
 /** Enable/disable BLE. Disabling disconnects and stops advertising. */
 void zephcore_ble_set_enabled(bool enable);
 
+/** True if BLE is enabled */
+bool zephcore_ble_is_enabled(void);
+
 /** True if BLE is the active transport and ready to send. */
 bool zephcore_ble_is_active(void);
 

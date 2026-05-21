@@ -334,7 +334,7 @@ static void mesh_event_loop(void)
 			 * transiently (HCI timeout, controller pacing) the device
 			 * would silently stop advertising and be undiscoverable
 			 * until next reboot.  Cheap to nudge it back here. */
-			if (!zephcore_ble_is_connected() && !zephcore_ble_is_advertising()) {
+			if (zephcore_ble_is_enabled && !zephcore_ble_is_connected() && !zephcore_ble_is_advertising()) {
 				LOG_WRN("BLE adv watchdog: not advertising, re-enabling");
 				zephcore_ble_set_enabled(true);
 			}
@@ -675,7 +675,7 @@ int main(void)
 	ui_set_battery(zephyr_board.getBattMilliVolts(), 0);
 	ui_set_gps_available(gps_is_available());
 	ui_set_gps_enabled(companion_mesh.prefs.gps_enabled != 0);
-	ui_set_ble_enabled(true);  /* BLE starts advertising at boot */
+	ui_set_ble_enabled(companion_mesh.prefs.ble_disabled != 1);  /* BLE starts advertising at boot */
 
 	/* Restore offgrid mode (client repeat) state from persisted prefs */
 	ui_set_offgrid_mode(companion_mesh.prefs.client_repeat != 0);

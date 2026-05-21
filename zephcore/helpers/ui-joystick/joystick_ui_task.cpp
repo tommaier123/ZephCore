@@ -300,6 +300,16 @@ void JoystickUITask::gotoRadioStatsScreen()   { setCurrScreen(_radio_stats); }
 void JoystickUITask::gotoRepeatersScreen()    { setCurrScreen(_repeaters); }
 void JoystickUITask::gotoChannelsScreen()     { setCurrScreen(_channels); }
 void JoystickUITask::gotoT9InputScreen()      { setCurrScreen(_t9_input); }
+
+void JoystickUITask::gotoT9InputScreenWithPrefix(const char *prefix)
+{
+	if (!_t9_input) return;
+	auto *t9 = static_cast<T9InputScreen *>(_t9_input);
+	t9->clearInput();
+	t9->setInitialInput(prefix);
+	setCurrScreen(_t9_input);
+}
+
 void JoystickUITask::gotoRenameNodeScreen()   { setCurrScreen(_rename_node); }
 void JoystickUITask::gotoBLECodeScreen()      { setCurrScreen(_ble_code); }
 void JoystickUITask::gotoStatsScreen()        { setCurrScreen(_stats); }
@@ -670,7 +680,7 @@ void JoystickUITask::toggleWakeOnMsg()
 /* ===== Notifications from mesh ===== */
 void JoystickUITask::newMsg(uint8_t path_len, const char *from_name, const char *text, int msgcount)
 {
-	(void)msgcount;  /* tracked by CompanionMesh; we mirror via msgRead() side-effect only */
+	(void)msgcount;  /* tracked by CompanionMesh */
 	if (_unread) {
 		/* When BLE phone is connected it pulls offline queue and marks read;
 		 * keep the message in our local history but don't count as unread. */
@@ -721,16 +731,6 @@ void JoystickUITask::newChannelMsg(const char *channel_name, const char *text,
 		buzzer_play("kerplop:d=16,o=6,b=120:32g#,32c#");
 	}
 #endif
-}
-
-void JoystickUITask::msgRead(int msgcount)
-{
-	/* Called from CompanionMesh when the BLE-offline-queue drains to 0
-	 * (phone synced); auto-navigate home if the user is sitting on the
-	 * Unread list looking at what just got cleared. */
-	if (msgcount == 0 && _curr == _unread) {
-		gotoHomeScreen();
-	}
 }
 
 void JoystickUITask::notify()

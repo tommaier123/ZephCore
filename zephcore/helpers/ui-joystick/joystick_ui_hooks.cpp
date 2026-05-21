@@ -197,13 +197,6 @@ extern "C" void ui_notify_packet_sent(void)
 	}
 }
 
-extern "C" void ui_set_msg_count(uint16_t count)
-{
-	if (s_task) {
-		s_task->msgRead((int)count);
-	}
-}
-
 extern "C" void ui_set_ble_status(bool connected, const char *name)
 {
 	(void)name;
@@ -232,21 +225,6 @@ extern "C" void ui_notify_radio_stats(uint32_t pkt_recv, uint32_t pkt_sent, uint
 	}
 }
 
-/* ===== Pull-model no-ops =====
- * The joystick UI reads all hardware state on demand at render time, so these
- * push-model hooks from the old button UI have no work to do. */
-extern "C" void ui_set_gps_data(bool, uint8_t, int32_t, int32_t, int32_t) {}
-extern "C" void ui_set_clock(uint32_t) {}
-extern "C" void ui_add_recent(const char *, int16_t, uint32_t) {}
-extern "C" void ui_set_node_name(const char *) {}
-extern "C" void ui_clear_recent(void) {}
-extern "C" void ui_set_sensor_data(int16_t, uint32_t, uint16_t, uint16_t) {}
-extern "C" void ui_set_gps_available(bool) {}
-extern "C" void ui_set_gps_enabled(bool) {}
-extern "C" void ui_set_gps_state(uint8_t, uint32_t, uint32_t) {}
-extern "C" void ui_set_buzzer_quiet(bool) {}
-extern "C" void ui_set_offgrid_mode(bool) {}
-
 extern "C" void ui_set_battery(uint16_t mv, uint8_t /*pct*/)
 {
 	if (s_task) {
@@ -267,3 +245,20 @@ extern "C" void ui_refresh_display(void)
 		s_task->forceRefresh();
 	}
 }
+
+
+/* ===== Pull-model no-ops =====
+ * The joystick UI reads all hardware state on demand at render time, so these
+ * push-model hooks from the old button UI have no work to do. */
+extern "C" void ui_set_gps_data(bool, uint8_t, int32_t, int32_t, int32_t) {}
+extern "C" void ui_set_clock(uint32_t) {}
+extern "C" void ui_add_recent(const char *, int16_t, uint32_t) {}
+extern "C" void ui_set_node_name(const char *) {}
+extern "C" void ui_clear_recent(void) {}
+extern "C" void ui_set_sensor_data(int16_t, uint32_t, uint16_t, uint16_t) {}
+extern "C" void ui_set_gps_available(bool) {}
+extern "C" void ui_set_gps_enabled(bool) {}
+extern "C" void ui_set_gps_state(uint8_t, uint32_t, uint32_t) {}
+extern "C" void ui_set_buzzer_quiet(bool) {}
+extern "C" void ui_set_offgrid_mode(bool) {}
+extern "C" void ui_set_msg_count(uint16_t count) {}

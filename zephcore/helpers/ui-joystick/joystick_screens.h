@@ -111,6 +111,8 @@ class GPSSettingsScreen : public UIScreen {
 	float _speed_kmh, _heading_deg;
 	bool _heading_valid;
 	uint32_t _heading_hold_until;
+	bool _show_alt;
+	uint32_t _alt_cycle_ms;
 	struct k_timer _sample_timer;
 	static void sampleTimerCb(struct k_timer *t);
 	void sampleGPS();
@@ -235,6 +237,13 @@ class T9InputScreen : public UIScreen {
 public:
 	T9InputScreen(JoystickUITask *task);
 	void clearInput() { memset(_input, 0, sizeof(_input)); _cursor = 0; }
+	void setInitialInput(const char *text) {
+		if (!text || !text[0]) return;
+		strncpy(_input, text, sizeof(_input) - 1);
+		_input[sizeof(_input) - 1] = '\0';
+		_cursor = (int)strlen(_input);
+		_last_key = -1; _letter_index = 0; _last_press_time = 0;
+	}
 	const char *getInput() const { return _input; }
 	int render(JoystickDisplay &display) override;
 	bool handleInput(char c) override;
@@ -313,17 +322,24 @@ public:
 /* ===== SnakeScreen ===== */
 class SnakeScreen : public UIScreen {
 	JoystickUITask *_task;
-	static const int GRID_W = 21;
-	static const int GRID_H = 5;
-	int8_t _snake_x[GRID_W * GRID_H];
-	int8_t _snake_y[GRID_W * GRID_H];
+	/* runtime grid */
+	int _grid_w;
+	int _grid_h;
+	int _max_len;
+	/* snake storage (safe upper bound) */
+	static constexpr int MAX_SNAKE_LEN = 1024;
+	int8_t _snake_x[MAX_SNAKE_LEN];
+	int8_t _snake_y[MAX_SNAKE_LEN];
 	int _snake_len;
 	int8_t _food_x, _food_y;
+	uint32_t _next_move;
 	int _score;
+	bool _grid_ready;
 	struct k_timer _tick_timer;
 	volatile bool _tick_due;  /* set in timer ISR, consumed in render */
 	static void tickTimerCb(struct k_timer *t);
 
+	void updateGrid(JoystickDisplay &display);
 	void placeFood();
 	void reset();
 	void advanceGame();

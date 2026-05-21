@@ -456,9 +456,11 @@ static int8_t s_ndir_y = 0;
 static int s_state = STATE_READY;
 
 SnakeScreen::SnakeScreen(JoystickUITask *task)
-	: _task(task), _snake_len(0),
-	  _food_x(0), _food_y(0), _score(0),
-	  _tick_due(false)
+	: _task(task), _grid_w(0), _grid_h(0),
+	  _max_len(0), _snake_len(0),
+	  _food_x(0), _food_y(0),
+	  _next_move(0), _score(0),
+	  _grid_ready(false), _tick_due(false)
 {
 	memset(_snake_x, 0, sizeof(_snake_x));
 	memset(_snake_y, 0, sizeof(_snake_y));
@@ -505,58 +507,93 @@ void SnakeScreen::onDisplayOn()
 	if (s_state == STATE_PLAYING) startTicking();
 }
 
+void SnakeScreen::updateGrid(JoystickDisplay &display)
+{
+	_grid_w = display.width() / SNAKE_CELL;
+	_grid_h = (display.height() - SNAKE_HEADER) / SNAKE_CELL;
+
+	if (_grid_w < 5) _grid_w = 5;
+	if (_grid_h < 3) _grid_h = 3;
+
+	_max_len = _grid_w * _grid_h;
+
+	if (_max_len > MAX_SNAKE_LEN)
+		_max_len = MAX_SNAKE_LEN;
+
+	_grid_ready = true;
+}
+
 void SnakeScreen::reset()
 {
-	int cx = GRID_W / 2, cy = GRID_H / 2;
 	_snake_len = 3;
-	_snake_x[0] = cx;     _snake_y[0] = cy;
-	_snake_x[1] = cx - 1; _snake_y[1] = cy;
-	_snake_x[2] = cx - 2; _snake_y[2] = cy;
 	s_dir_x = 1; s_dir_y = 0;
 	s_ndir_x = 1; s_ndir_y = 0;
 	_score = 0;
 	s_state = STATE_READY;
 	_tick_due = false;
-	placeFood();
+	_next_move = 0;
+	if (_grid_ready) {
+		int cx = _grid_w / 2;
+		int cy = _grid_h / 2;
+		_snake_x[0] = cx;     _snake_y[0] = cy;
+		_snake_x[1] = cx - 1; _snake_y[1] = cy;
+		_snake_x[2] = cx - 2; _snake_y[2] = cy;
+		placeFood();
+	}
 }
 
 void SnakeScreen::placeFood()
 {
 	for (int tries = 0; tries < 200; tries++) {
-		int8_t x = (int8_t)(sys_rand32_get() % GRID_W);
-		int8_t y = (int8_t)(sys_rand32_get() % GRID_H);
+		int8_t x = sys_rand32_get() % _grid_w;
+		int8_t y = sys_rand32_get() % _grid_h;
 		bool hit = false;
 		for (int i = 0; i < _snake_len; i++) {
-			if (_snake_x[i] == x && _snake_y[i] == y) { hit = true; break; }
+			if (_snake_x[i] == x && _snake_y[i] == y) {
+				hit = true;
+				break;
+			}
 		}
-		if (!hit) { _food_x = x; _food_y = y; return; }
+		if (!hit) {
+			_food_x = x; _food_y = y;
+			return;
+		}
 	}
 	_food_x = 0; _food_y = 0;
 }
 
-static bool headHitsBody(const int8_t *sx, const int8_t *sy, int len)
-{
-	for (int i = 1; i < len; i++) {
-		if (sx[0] == sx[i] && sy[0] == sy[i]) return true;
-	}
-	return false;
-}
-
 void SnakeScreen::advanceGame()
 {
+	if (s_state != STATE_PLAYING) return;
+	if (!_grid_ready) return;
+	uint32_t now = k_uptime_get_32();
+	if (now < _next_move) return;
+	_next_move = now + SNAKE_TICK_MS;
+
 	s_dir_x = s_ndir_x; s_dir_y = s_ndir_y;
 
-	int8_t nx = _snake_x[0] + s_dir_x;
-	int8_t ny = _snake_y[0] + s_dir_y;
+	int nx = _snake_x[0] + s_dir_x;
+	int ny = _snake_y[0] + s_dir_y;
 
-	if (nx < 0 || ny < 0 || nx >= GRID_W || ny >= GRID_H) {
+	/* WALL CHECK */
+	if (nx < 0 || ny < 0 || nx >= _grid_w || ny >= _grid_h) {
 		s_state = STATE_OVER;
 		k_timer_stop(&_tick_timer);
 		return;
 	}
 
 	bool eat = (nx == _food_x && ny == _food_y);
-	if (eat && _snake_len < SNAKE_MAX_LEN) _snake_len++;
+
+	int body_to_check = eat ? _snake_len : (_snake_len - 1);
+	for (int i = 1; i < body_to_check; i++) {
+		if (_snake_x[i] == nx && _snake_y[i] == ny) {
+			s_state = STATE_OVER;
+			k_timer_stop(&_tick_timer);
+			return;
+		}
+	}
+
+	if (eat && _snake_len < _max_len) _snake_len++;
 
 	for (int i = _snake_len - 1; i > 0; i--) {
 		_snake_x[i] = _snake_x[i - 1];
@@ -564,16 +601,17 @@ void SnakeScreen::advanceGame()
 	}
 	_snake_x[0] = nx; _snake_y[0] = ny;
 
-	if (headHitsBody(_snake_x, _snake_y, _snake_len)) {
-		s_state = STATE_OVER;
-		k_timer_stop(&_tick_timer);
-		return;
+	if (eat) {
+		_score++;
+		placeFood();
 	}
-	if (eat) { _score++; placeFood(); }
 }
 
 int SnakeScreen::render(JoystickDisplay &display)
 {
+	// Use the correct size based on the display
+	updateGrid(display);
+
 	/* Advance game on tick fire (set by k_timer ISR). */
 	if (_tick_due) {
 		_tick_due = false;
@@ -614,10 +652,17 @@ int SnakeScreen::render(JoystickDisplay &display)
 
 bool SnakeScreen::handleInput(char c)
 {
-	if (c == KEY_UP    && s_dir_y == 0) { s_ndir_x = 0;  s_ndir_y = -1; return true; }
-	if (c == KEY_DOWN  && s_dir_y == 0) { s_ndir_x = 0;  s_ndir_y =  1; return true; }
-	if (c == KEY_LEFT  && s_dir_x == 0) { s_ndir_x = -1; s_ndir_y =  0; return true; }
-	if (c == KEY_RIGHT && s_dir_x == 0) { s_ndir_x =  1; s_ndir_y =  0; return true; }
+	/* One turn per tick: if a direction change is already queued for the
+	 * upcoming tick, ignore further direction input.  Also block the 180°
+	 * reverse (would move head straight into body[1]).
+	 * Once the tick fires, s_dir == s_ndir again and new input is accepted. */
+	bool turn_queued = (s_ndir_x != s_dir_x || s_ndir_y != s_dir_y);
+	if (!turn_queued) {
+		if (c == KEY_UP    && s_dir_y != 1)  { s_ndir_x = 0;  s_ndir_y = -1; return true; }
+		if (c == KEY_DOWN  && s_dir_y != -1) { s_ndir_x = 0;  s_ndir_y =  1; return true; }
+		if (c == KEY_LEFT  && s_dir_x != 1)  { s_ndir_x = -1; s_ndir_y =  0; return true; }
+		if (c == KEY_RIGHT && s_dir_x != -1) { s_ndir_x =  1; s_ndir_y =  0; return true; }
+	}
 	if (c == KEY_ENTER) {
 		if (s_state == STATE_READY || s_state == STATE_OVER) {
 			reset(); s_state = STATE_PLAYING;
