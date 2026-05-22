@@ -41,6 +41,7 @@ extern "C" void bt_ctlr_assert_handle(char *file, uint32_t line)
 #include <app/RepeaterDataStore.h>
 #include <app/RepeaterMesh.h>
 #include <adapters/clock/ZephyrRTCClock.h>
+#include <helpers/time_sync.h>
 #include <ZephyrSensorManager.h>
 
 /* UI subsystem (display, buttons, buzzer) */
@@ -261,6 +262,7 @@ static void gps_fix_callback(double lat, double lon, int64_t utc_time)
 	if (utc_time > 0) {
 		LOG_INF("GPS fix: RTC sync time=%lld", utc_time);
 		rtc_clock.setCurrentTime((uint32_t)utc_time);
+		time_sync_report(TIME_SYNC_GPS);
 	}
 
 	int lat_deg = (int)lat;

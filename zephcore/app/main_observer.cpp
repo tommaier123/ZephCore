@@ -17,7 +17,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/sys/ring_buffer.h>
-#include <zephyr/logging/log.h>
+#include <helpers/time_sync.h>
 
 #define CLI_REPLY_SIZE 256
 
@@ -222,6 +222,7 @@ static mesh::ZephyrRTCClock s_rtc_clock;
 static void time_sync_cb(uint32_t unix_ts)
 {
 	s_rtc_clock.setCurrentTime(unix_ts);
+	time_sync_report(TIME_SYNC_WIFI);
 	LOG_INF("RTC synced from SNTP: %u", unix_ts);
 }
 

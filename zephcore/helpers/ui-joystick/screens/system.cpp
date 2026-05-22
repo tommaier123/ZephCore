@@ -8,6 +8,7 @@
 #include "../joystick_ui_task.h"
 #include "screen_helpers.h"
 #include <adapters/gps/ZephyrGPSManager.h>
+#include <helpers/time_sync.h>
 #include <helpers/ui/ui_mesh_actions.h>
 #include <zephyr/kernel.h>
 #include <zephyr/random/random.h>
@@ -303,7 +304,7 @@ int SystemTimeScreen::render(JoystickDisplay &display)
 
 	const char *labels[4] = { "Time:", "Date:", "TZ:", "Source:" };
 	const char *values[4] = { timeText, dateText, "UTC",
-							   _task->getGPSState() ? "GPS" : "App" };
+							   time_sync_display_label() };
 	int y = kContentY + 2;
 	for (int i = 0; i < 4; i++) {
 		display.setColor(JoystickDisplay::GREEN);

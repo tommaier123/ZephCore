@@ -23,6 +23,7 @@ LOG_MODULE_REGISTER(zephcore_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/drivers/hwinfo.h>
 #include <ZephyrSensorManager.h>
+#include <helpers/time_sync.h>
 #include "ui_task.h"
 #include "ui_mesh_actions.h"
 #include "oled_power.h"
@@ -461,6 +462,7 @@ static void gps_fix_callback(double lat, double lon, int64_t utc_time)
 	if (utc_time > 0) {
 		LOG_INF("GPS fix: RTC sync time=%lld", utc_time);
 		rtc_clock.setCurrentTime((uint32_t)utc_time);
+		time_sync_report(TIME_SYNC_GPS);
 	}
 
 #ifdef ZEPHCORE_LORA

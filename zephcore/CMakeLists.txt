@@ -430,6 +430,7 @@ target_sources(app PRIVATE
   adapters/sensors/ZephyrEnvSensors.cpp
   helpers/AdvertDataHelpers.cpp
   helpers/oled_power.c
+  helpers/time_sync.c
 )
 
 # ========== Radio Driver Selection ==========

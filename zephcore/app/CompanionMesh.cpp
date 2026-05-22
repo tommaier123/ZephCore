@@ -16,6 +16,8 @@
 #include <ZephyrSensorManager.h>
 #include <adapters/sensors/SimpleLPP.h>
 #include <adapters/ble/ZephyrBLE.h>
+#include <adapters/gps/ZephyrGPSManager.h>
+#include <helpers/time_sync.h>
 #if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_BUTTON) || IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
 #include <ui_task.h>
 #define ZEPHCORE_HAS_UI_TASK 1
@@ -2239,6 +2241,7 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			// Arduino: only allow setting time forward (prevents time attacks)
 			if (secs >= curr) {
 				getRTCClock()->setCurrentTime(secs);
+				time_sync_report(TIME_SYNC_APP);
 				sendPacketOk();
 			} else {
 				sendPacketError(ERR_ILLEGAL_ARG);

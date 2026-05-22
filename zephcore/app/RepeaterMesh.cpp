@@ -11,6 +11,7 @@
 #include <adapters/sensors/SimpleLPP.h>
 #include <adapters/sensors/ZephyrEnvSensors.h>
 #include <adapters/gps/ZephyrGPSManager.h>
+#include <helpers/time_sync.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -53,6 +54,7 @@ static void uplink_time_sync_cb(uint32_t unix_ts)
 {
 	if (s_uplink_mesh) {
 		s_uplink_mesh->getRTCClock()->setCurrentTime(unix_ts);
+		time_sync_report(TIME_SYNC_WIFI);
 	}
 }
 #endif
