@@ -96,6 +96,12 @@ class BaseChatMesh : public mesh::Mesh {
 		const char *text, uint32_t &expected_ack);
 	void sendAckTo(const ContactInfo &dest, const uint8_t *ack_hash, uint8_t ack_len = 4);
 
+	/* Shared flood-vs-direct dispatch tail used by sendMessage/sendCommandData/
+	 * sendLogin/sendAnonReq/sendRequest. Sets est_timeout and (when
+	 * set_txt_timeout) txt_send_timeout; returns MSG_SEND_SENT_FLOOD/DIRECT. */
+	int dispatchToRecipient(mesh::Packet *pkt, const ContactInfo &recipient,
+		uint32_t &est_timeout, bool set_txt_timeout);
+
 protected:
 	BaseChatMesh(mesh::Radio &radio, mesh::MillisecondClock &ms, mesh::RNG &rng, mesh::RTCClock &rtc,
 		mesh::PacketManager &mgr, mesh::MeshTables &tables)
