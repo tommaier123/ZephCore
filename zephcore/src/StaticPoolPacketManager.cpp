@@ -46,14 +46,7 @@ struct PacketQueue {
 		}
 		if (best_idx < 0) return nullptr;
 
-		Packet *top = _table[best_idx];
-		for (int i = best_idx; i < _num - 1; i++) {
-			_table[i] = _table[i + 1];
-			_pri_table[i] = _pri_table[i + 1];
-			_schedule_table[i] = _schedule_table[i + 1];
-		}
-		_num--;
-		return top;
+		return removeByIdx(best_idx);
 	}
 
 	Packet *removeByIdx(int i) {

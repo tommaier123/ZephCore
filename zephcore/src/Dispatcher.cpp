@@ -303,11 +303,10 @@ void Dispatcher::checkRecv()
 		logRx(pkt, pkt->getRawLength(), score);
 		if (pkt->isRouteFlood()) {
 			n_recv_flood++;
-			processRecvPacket(pkt);
 		} else {
 			n_recv_direct++;
-			processRecvPacket(pkt);
 		}
+		processRecvPacket(pkt);
 	}
 }
 
