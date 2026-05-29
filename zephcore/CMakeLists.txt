@@ -487,6 +487,7 @@ if(CONFIG_ZEPHCORE_ROLE_REPEATER)
   target_sources(app PRIVATE
     src/main_repeater.cpp
     app/RepeaterMesh.cpp
+    app/RepeaterRegionCLI.cpp
     app/RepeaterDataStore.cpp
     helpers/ClientACL.cpp
     helpers/RegionMap.cpp
@@ -505,6 +506,7 @@ if(CONFIG_ZEPHCORE_ROLE_REPEATER)
   )
   if(CONFIG_ZEPHCORE_REPEATER_UPLINK AND CONFIG_MQTT_LIB)
     target_sources(app PRIVATE
+      app/RepeaterUplink.cpp
       app/observer_creds.cpp
       adapters/wifi/ZephyrWiFiStation.c
       adapters/mqtt/ZephyrMQTTPublisher.c

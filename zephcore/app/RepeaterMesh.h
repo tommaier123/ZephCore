@@ -132,6 +132,12 @@ class RepeaterMesh : public mesh::Mesh, public CommonCLICallbacks {
     void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
     void sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size);
 
+    /* Region-definition CLI (defined in app/RepeaterRegionCLI.cpp).
+     * handleRegionLoadLine: a continuation line during `region load`.
+     * handleRegionCommand:  a `region ...` command. */
+    void handleRegionLoadLine(char* command, char* reply);
+    void handleRegionCommand(char* command, char* reply);
+
 protected:
     uint8_t getDutyCyclePercent() const override {
         /* Arduino formula: duty% = 100 / (af + 1). af=0 → 100%, af=9 → 10%. */
