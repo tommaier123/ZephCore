@@ -6,6 +6,8 @@
 #include <mesh/Utils.h>
 #include <psa/crypto.h>
 #include <string.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/reboot.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(zephcore_utils, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
@@ -203,6 +205,17 @@ bool Utils::constantTimeEqual(const void *a, const void *b, size_t n)
 		result |= (uint8_t)(pa[i] ^ pb[i]);
 	}
 	return result == 0;
+}
+
+void Utils::cryptoPanicReboot(const char *msg)
+{
+	/* No pre-reboot k_msleep: printk is synchronous on RTT/UART so the
+	 * line is already on the wire by the time sys_reboot fires, and the
+	 * 2-second delay we used to do here just blocked the mesh thread on
+	 * the rare-but-realistic ZephyrRNG::random() retry failure path. */
+	printk("crypto panic: %s — rebooting\n", msg ? msg : "(no detail)");
+	sys_reboot(SYS_REBOOT_COLD);
+	for (;;) { /* sys_reboot is FUNC_NORETURN, but satisfy [[noreturn]] */ }
 }
 
 void Utils::secureZeroize(void *buf, size_t n)

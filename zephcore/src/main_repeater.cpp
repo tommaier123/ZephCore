@@ -454,55 +454,15 @@ int main(void)
 	lora_radio.setTxDoneCallback(lora_tx_done_callback, nullptr);
 	repeater_mesh.setTxQueuedCallback(tx_queued_callback, nullptr);
 
-	/* Load or generate identity BEFORE begin().
-	 *
-	 * First-boot keygen uses ZephyrRNG::mixIdentitySeed() — a layered
-	 * entropy mixer combining sys_csrand_get + HWINFO unique ID + ADC
-	 * LSB noise + CPU cycle-counter jitter, conditioned via SHA-512.
-	 * This compensates for ESP32's hardware TRNG being only seeded
-	 * after WiFi/BT radio init (which on a repeater is on-demand for
-	 * WiFi OTA — there's no guaranteed radio activity at boot). */
+	/* Load or generate identity BEFORE begin(). First-boot keygen runs
+	 * the layered entropy mixer + Ed25519 derive + reserved-prefix
+	 * guard inside ZephyrRNG::generateFirstBootIdentity. */
 	mesh::LocalIdentity self_identity;
 	if (!data_store.loadIdentity(self_identity)) {
 		LOG_INF("No identity found, generating new keypair...");
-
-		/* Sample ADC LSB noise — best-effort independent physical
-		 * source. Boards without battery ADC return 0; jitter remains
-		 * the primary entropy source either way. */
-		uint8_t adc_noise[32] = {0};
-		for (size_t i = 0; i < sizeof(adc_noise); i++) {
-			adc_noise[i] = (uint8_t)zephyr_board.getBattMilliVolts();
-			k_msleep(1);
-		}
-
-		uint8_t seed[32];
-		mesh::ZephyrRNG::mixIdentitySeed(seed, sizeof(seed),
-						 adc_noise, sizeof(adc_noise));
-		{
-			mesh::SeededRNG seed_rng(seed, sizeof(seed));
-			self_identity = mesh::LocalIdentity(&seed_rng);
-		}
-
-		/* Ensure pub_key[0] is not reserved (0x00 or 0xFF in MeshCore protocol).
-		 * With a properly mixed seed this almost never triggers; the
-		 * cap+reboot is a safety net against pathological entropy failure. */
-		int attempt = 0;
-		while (self_identity.pub_key[0] == 0x00 || self_identity.pub_key[0] == 0xFF) {
-			if (++attempt > 100) {
-				LOG_ERR("Identity gen stuck on reserved prefix; rebooting");
-				k_msleep(2000);
-				sys_reboot(SYS_REBOOT_COLD);
-			}
-			mesh::ZephyrRNG::mixIdentitySeed(seed, sizeof(seed));
-			mesh::SeededRNG retry_rng(seed, sizeof(seed));
-			self_identity = mesh::LocalIdentity(&retry_rng);
-		}
-
+		mesh::ZephyrRNG::generateFirstBootIdentity(self_identity);
 		data_store.saveIdentity(self_identity);
 		LOG_INF("New identity saved");
-
-		mesh::Utils::secureZeroize(seed, sizeof(seed));
-		mesh::Utils::secureZeroize(adc_noise, sizeof(adc_noise));
 	}
 	repeater_mesh.self_id = self_identity;
 

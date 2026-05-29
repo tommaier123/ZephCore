@@ -34,6 +34,13 @@ public:
 	 * secrets after their last use. */
 	static void secureZeroize(void *buf, size_t n);
 
+	/* Log a crypto-invariant failure to printk and cold-reboot.
+	 * Used when an entropy source, KDF, or other primitive cannot
+	 * produce a safe result — proceeding would risk weak keys or
+	 * bypassed authentication, so we restart rather than continue.
+	 * Does not return. */
+	[[noreturn]] static void cryptoPanicReboot(const char *msg);
+
 	static void toHex(char *dest, const uint8_t *src, size_t len);
 	static bool fromHex(uint8_t *dest, int dest_size, const char *src_hex);
 	static bool isHexChar(char c);

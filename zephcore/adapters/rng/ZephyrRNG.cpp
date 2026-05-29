@@ -27,12 +27,10 @@ void ZephyrRNG::random(uint8_t *dest, size_t sz)
 		if (sys_csrand_get(dest, sz) == 0) return;
 		k_msleep(10);
 	}
-	printk("ZephyrRNG: CSPRNG unavailable after retries — rebooting\n");
-	k_msleep(2000);
-	sys_reboot(SYS_REBOOT_COLD);
+	Utils::cryptoPanicReboot("CSPRNG unavailable after retries");
 }
 
-/* ===== Jitter sampling + health check =====================================
+/* ===== Jitter sampling + online health check =============================
  *
  * Stephan Müller "CPU Time Jitter Based Non-Physical True Random Number
  * Generator" — Linux kernel's jitterentropy_rng. NIST SP 800-90B has
@@ -44,54 +42,27 @@ void ZephyrRNG::random(uint8_t *dest, size_t sz)
  * × 0.1 bits = 3,200 estimated bits. 256 needed for Ed25519 → 12×
  * margin even pessimistically.
  *
- * Health check is the NIST SP 800-90B "repetition count" plus a
- * variance check on the first 128 samples. Detects stuck-source
+ * Health check (NIST SP 800-90B style): online repetition count + a
+ * distinct-value check tracked across all samples in the window with
+ * scalar state — no per-sample buffer needed. Detects stuck-source
  * catastrophic failure (e.g. cycle counter not advancing). Does not
  * statistically prove entropy quality — that's what the literature is
  * for. */
 
-#define JITTER_TRACKED 128
-
-static bool jitter_health_check(const uint32_t *deltas, size_t n)
-{
-	if (n < 16) return false;
-
-	/* Repetition count: 32+ consecutive identical samples is failure. */
-	int consec = 1, max_consec = 1;
-	for (size_t i = 1; i < n; i++) {
-		if (deltas[i] == deltas[i - 1]) {
-			consec++;
-			if (consec > max_consec) max_consec = consec;
-		} else {
-			consec = 1;
-		}
-	}
-	if (max_consec >= 32) return false;
-
-	/* Variance: require at least 5 distinct delta values across the
-	 * tracked window. A perfectly deterministic CPU would produce one
-	 * value; even minimal jitter produces several. */
-	uint32_t distinct[8] = {0};
-	int n_distinct = 0;
-	for (size_t i = 0; i < n && n_distinct < 8; i++) {
-		bool found = false;
-		for (int j = 0; j < n_distinct; j++) {
-			if (distinct[j] == deltas[i]) { found = true; break; }
-		}
-		if (!found) distinct[n_distinct++] = deltas[i];
-	}
-	return n_distinct >= 5;
-}
-
 static bool sample_cpu_jitter(uint8_t *pool, size_t pool_size,
 			      size_t pool_offset, uint32_t duration_ms)
 {
-	uint32_t deltas[JITTER_TRACKED];
-	size_t tracked_idx = 0;
-
 	uint32_t accum = k_cycle_get_32();
 	int64_t deadline = k_uptime_get() + duration_ms;
 	size_t idx = pool_offset;
+
+	/* Online health stats: 32 bytes total vs. the previous 512-byte
+	 * deltas[] array. Tracks every sample, not just the first 128. */
+	uint32_t prev_delta = 0;
+	int cur_consec = 0, max_consec = 0;
+	uint32_t distinct[8] = {0};
+	int n_distinct = 0;
+	int n_samples = 0;
 
 	while (k_uptime_get() < deadline) {
 		uint32_t t1 = k_cycle_get_32();
@@ -113,10 +84,29 @@ static bool sample_cpu_jitter(uint8_t *pool, size_t pool_size,
 		pool[idx++ % pool_size] ^= (uint8_t)accum;
 		pool[idx++ % pool_size] ^= (uint8_t)(accum >> 8);
 
-		if (tracked_idx < JITTER_TRACKED) deltas[tracked_idx++] = delta;
+		/* Online repetition count */
+		if (n_samples > 0 && delta == prev_delta) {
+			if (++cur_consec > max_consec) max_consec = cur_consec;
+		} else {
+			cur_consec = 1;
+		}
+		prev_delta = delta;
+
+		/* Track first 8 distinct delta values */
+		if (n_distinct < 8) {
+			bool found = false;
+			for (int j = 0; j < n_distinct; j++) {
+				if (distinct[j] == delta) { found = true; break; }
+			}
+			if (!found) distinct[n_distinct++] = delta;
+		}
+
+		n_samples++;
 	}
 
-	return jitter_health_check(deltas, tracked_idx);
+	if (n_samples < 16) return false;
+	if (max_consec >= 32) return false;  /* stuck source */
+	return n_distinct >= 5;               /* minimal variance */
 }
 
 /* ===== Entropy extraction via AES-256-CTR ================================
@@ -142,18 +132,14 @@ static int extract_via_aes_ctr(const uint8_t *pool, size_t pool_len,
 {
 	psa_status_t status;
 	uint8_t key[32];
-	size_t key_len = 0;
 
 	/* PSA is idempotent — already initialized via mbedTLS but a defensive
 	 * call here costs nothing if it returns PSA_ERROR_ALREADY_EXISTS. */
 	(void)psa_crypto_init();
 
-	/* Extract: SHA-256(pool) → AES key */
-	status = psa_hash_compute(PSA_ALG_SHA_256, pool, pool_len,
-				  key, sizeof(key), &key_len);
-	if (status != PSA_SUCCESS || key_len != sizeof(key)) {
-		return -1;
-	}
+	/* Extract: SHA-256(pool) → AES key. Reuses the codebase's PSA-backed
+	 * SHA-256 wrapper instead of open-coding psa_hash_compute here. */
+	Utils::sha256(key, sizeof(key), pool, (int)pool_len);
 
 	/* Import key for AES-256-ECB */
 	psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
@@ -246,22 +232,18 @@ void ZephyrRNG::mixIdentitySeed(uint8_t *out, size_t out_len,
 	 * AES-ECB on a 128-bit counter. Per crypto consultant guidance —
 	 * see extract_via_aes_ctr() for full rationale. */
 	if (extract_via_aes_ctr(pool, sizeof(pool), out, out_len) != 0) {
-		printk("ZephyrRNG: AES-CTR extraction failed — rebooting\n");
-		k_msleep(2000);
-		sys_reboot(SYS_REBOOT_COLD);
+		Utils::cryptoPanicReboot("AES-CTR seed extraction failed");
 	}
 
 	/* Output sanity check — reject all-zero / all-0xFF (catastrophic
-	 * failure of every source). Reboot to retry. */
+	 * failure of every source). */
 	bool all_zero = true, all_ff = true;
 	for (size_t i = 0; i < out_len; i++) {
 		if (out[i] != 0x00) all_zero = false;
 		if (out[i] != 0xFF) all_ff = false;
 	}
 	if (all_zero || all_ff) {
-		printk("ZephyrRNG: degenerate seed output — rebooting\n");
-		k_msleep(2000);
-		sys_reboot(SYS_REBOOT_COLD);
+		Utils::cryptoPanicReboot("degenerate seed output (all-zero / all-FF)");
 	}
 
 	/* Wipe sensitive intermediate buffers — secureZeroize survives the
@@ -269,6 +251,29 @@ void ZephyrRNG::mixIdentitySeed(uint8_t *out, size_t out_len,
 	 * on stack locals that are never read again. */
 	Utils::secureZeroize(pool, sizeof(pool));
 	Utils::secureZeroize(devid, sizeof(devid));
+}
+
+void ZephyrRNG::generateFirstBootIdentity(LocalIdentity &out_identity)
+{
+	uint8_t seed[32];
+
+	mixIdentitySeed(seed, sizeof(seed));
+	out_identity.fromSeed(seed);
+
+	/* Reserved-prefix guard — MeshCore protocol treats pub_key[0] of
+	 * 0x00/0xFF as reserved markers. With a working CSPRNG the first
+	 * attempt almost always passes (P(reserved) = 2/256); the cap +
+	 * panic-reboot is a stuck-source backstop. */
+	int attempt = 0;
+	while (out_identity.pub_key[0] == 0x00 || out_identity.pub_key[0] == 0xFF) {
+		if (++attempt > 100) {
+			Utils::cryptoPanicReboot("identity gen stuck on reserved prefix");
+		}
+		mixIdentitySeed(seed, sizeof(seed));
+		out_identity.fromSeed(seed);
+	}
+
+	Utils::secureZeroize(seed, sizeof(seed));
 }
 
 } /* namespace mesh */

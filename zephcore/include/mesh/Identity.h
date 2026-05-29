@@ -49,6 +49,13 @@ public:
 	LocalIdentity(const char *prv_hex, const char *pub_hex);
 	LocalIdentity(RNG *rng);
 
+	/* Derive Ed25519 keypair from a 32-byte seed. Use this when you've
+	 * already produced a high-quality seed externally (e.g. via the
+	 * layered ZephyrRNG::mixIdentitySeed entropy mixer) — avoids the
+	 * one-shot-RNG-wrapper dance otherwise needed to feed bytes
+	 * through the LocalIdentity(RNG*) constructor. */
+	void fromSeed(const uint8_t seed[SEED_SIZE]);
+
 	void sign(uint8_t *sig, const uint8_t *message, int msg_len) const;
 	void calcSharedSecret(uint8_t *secret, const Identity &other) const { calcSharedSecret(secret, other.pub_key); }
 	void calcSharedSecret(uint8_t *secret, const uint8_t *other_pub_key) const;

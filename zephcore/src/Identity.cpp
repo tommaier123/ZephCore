@@ -54,6 +54,12 @@ LocalIdentity::LocalIdentity(RNG *rng)
 	uint8_t seed[SEED_SIZE];
 	rng->random(seed, SEED_SIZE);
 	ed25519_create_keypair(pub_key, prv_key, seed);
+	Utils::secureZeroize(seed, sizeof(seed));
+}
+
+void LocalIdentity::fromSeed(const uint8_t seed[SEED_SIZE])
+{
+	ed25519_create_keypair(pub_key, prv_key, seed);
 }
 
 bool LocalIdentity::validatePrivateKey(const uint8_t prv[64])
