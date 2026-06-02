@@ -77,7 +77,8 @@ static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
 #define MESH_EVENT_HOUSEKEEPING  BIT(3)  /* Periodic housekeeping (noise floor, etc.) */
 #define MESH_EVENT_GPS_ACTION    BIT(4)  /* GPS state change (must run on main thread!) */
 #define MESH_EVENT_TX_DRAIN      BIT(5)  /* Outbound packet delay expired, run checkSend */
-#define MESH_EVENT_ALL           (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE | MESH_EVENT_CLI_RX | MESH_EVENT_HOUSEKEEPING | MESH_EVENT_GPS_ACTION | MESH_EVENT_TX_DRAIN)
+#define MESH_EVENT_PUSH_TICK     BIT(6)  /* Room server: drive the post-sync push engine */
+#define MESH_EVENT_ALL           (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE | MESH_EVENT_CLI_RX | MESH_EVENT_HOUSEKEEPING | MESH_EVENT_GPS_ACTION | MESH_EVENT_TX_DRAIN | MESH_EVENT_PUSH_TICK)
 
 /* Housekeeping interval - infrequent to preserve power savings */
 #define HOUSEKEEPING_INTERVAL_MS CONFIG_ZEPHCORE_HOUSEKEEPING_INTERVAL_MS
@@ -104,6 +105,18 @@ K_WORK_DELAYABLE_DEFINE(initial_advert_work, initial_advert_work_fn);
 
 /* Housekeeping timer for periodic tasks (noise floor calibration, etc.) */
 K_TIMER_DEFINE(housekeeping_timer, housekeeping_timer_fn, NULL);
+
+/* Room server push timer — wakes loop() at PUSH_TICK_INTERVAL_MS so the
+ * post-sync push engine advances at its intended ~1.2 s cadence instead of
+ * the 5 s housekeeping tick. Keeps post delivery snappy and TX smooth under
+ * load (without running radio maintenance that often). */
+#define PUSH_TICK_INTERVAL_MS 500
+static void push_timer_fn(struct k_timer *timer)
+{
+	ARG_UNUSED(timer);
+	k_event_post(&mesh_events, MESH_EVENT_PUSH_TICK);
+}
+K_TIMER_DEFINE(push_timer, push_timer_fn, NULL);
 
 /* Forward declarations */
 #ifdef ZEPHCORE_LORA
@@ -318,6 +331,10 @@ static void room_event_loop(void)
 	k_timer_start(&housekeeping_timer, K_MSEC(HOUSEKEEPING_INTERVAL_MS),
 		      K_MSEC(HOUSEKEEPING_INTERVAL_MS));
 
+	/* Start the room-server push timer (drives post sync between clients). */
+	k_timer_start(&push_timer, K_MSEC(PUSH_TICK_INTERVAL_MS),
+		      K_MSEC(PUSH_TICK_INTERVAL_MS));
+
 	for (;;) {
 		/* Wait for any mesh event - blocks until signaled */
 		uint32_t events = k_event_wait(&mesh_events, MESH_EVENT_ALL, false, K_FOREVER);
@@ -333,7 +350,8 @@ static void room_event_loop(void)
 		/* Packet processing — only on radio/CLI/TX events */
 		if (room_mesh_ptr &&
 		    (events & (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE |
-			       MESH_EVENT_CLI_RX | MESH_EVENT_TX_DRAIN))) {
+			       MESH_EVENT_CLI_RX | MESH_EVENT_TX_DRAIN |
+			       MESH_EVENT_PUSH_TICK))) {
 			room_mesh_ptr->loop();
 		}
 #endif

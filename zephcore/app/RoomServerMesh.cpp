@@ -86,13 +86,15 @@ static void uplink_time_sync_cb(uint32_t unix_ts)
 #define SERVER_RESPONSE_DELAY       300
 #define TXT_ACK_DELAY               200
 
-/* Room server: post push/sync timing (matches upstream MeshCore). */
-#define PUSH_NOTIFY_DELAY_MILLIS    2000
+/* Room server: post push/sync timing. Upstream defaults are conservative
+ * (PUSH_NOTIFY 2000, POST_SYNC 6) which adds ~6-7s of delivery lag; lowered
+ * here for a more responsive room without changing wire formats. */
+#define PUSH_NOTIFY_DELAY_MILLIS    1000
 #define SYNC_PUSH_INTERVAL          1200
 #define PUSH_ACK_TIMEOUT_FLOOD      12000
 #define PUSH_TIMEOUT_BASE           4000
 #define PUSH_ACK_TIMEOUT_FACTOR     2000
-#define POST_SYNC_DELAY_SECS        6
+#define POST_SYNC_DELAY_SECS        2
 
 /* Stats blob returned for REQ_TYPE_GET_STATUS on a room server.  Mirrors the
  * repeater's RepeaterStats but reports posted/pushed counts in the trailing
