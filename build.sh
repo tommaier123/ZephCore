@@ -23,6 +23,14 @@ nRF_boards=(
     gat562_30s
 )
 
+# Native-Linux presets (not Zephyr boards — built with -b native_sim plus an
+# EXTRA_CONF_FILE). Each targets a real SBC arch, so it is cross-compiled.
+Linux_boards=(
+    femtofox
+    rak6421
+    rak6421_pi5
+)
+
 ESP32_boards=(
     xiao_esp32c3
     xiao_esp32c6/esp32c6/hpcore
@@ -68,6 +76,50 @@ if [[ $1 == "nrf" ]]; then
             mv build/zephyr/zephyr.uf2 firmware/"$board"-repeater-noscreen-"$COMMIT_HASH".uf2
             mv build/zephyr/zephyr.zip firmware/"$board"-repeater-noscreen-"$COMMIT_HASH".zip
         fi
+    done
+fi
+
+if [[ $1 == "linux" ]]; then
+    for board in "${Linux_boards[@]}"; do
+        # Pick the native_sim variant + cross toolchain for the target SBC arch.
+        case "$board" in
+            femtofox)
+                # Luckfox Pico Mini — ARMv7-A (32-bit) → native_sim (32-bit)
+                zboard="native_sim"
+                host="arm"
+                cross="/usr/bin/arm-linux-gnueabihf-"
+                ;;
+            rak6421|rak6421_pi5)
+                # Raspberry Pi — aarch64 (64-bit) → native_sim/native/64
+                zboard="native_sim/native/64"
+                host="aarch64"
+                cross="/usr/bin/aarch64-linux-gnu-"
+                ;;
+            *)
+                echo "Unknown linux board: $board"
+                exit 1
+                ;;
+        esac
+
+        # build native-Linux companion (TCP transport — the default role)
+        echo "Now building $board companion (native linux)"
+        west build -b "$zboard" zephcore --pristine -- \
+            -DZEPHYR_TOOLCHAIN_VARIANT=cross-compile \
+            -DNATIVE_TARGET_HOST="$host" \
+            -DCROSS_COMPILE="$cross" \
+            -DEXTRA_CONF_FILE="boards/linux_native/$board.conf"
+        # native_sim emits zephcore_native_linux.exe; ship it as an extension-less
+        # per-board name (zephcore_linux_<board>-<role>-<hash>).
+        mv build/zephyr/zephcore_native_linux.exe firmware/zephcore_linux_"$board"-companion-"$COMMIT_HASH"
+
+        # build native-Linux repeater
+        echo "Now building $board repeater (native linux)"
+        west build -b "$zboard" zephcore --pristine -- \
+            -DZEPHYR_TOOLCHAIN_VARIANT=cross-compile \
+            -DNATIVE_TARGET_HOST="$host" \
+            -DCROSS_COMPILE="$cross" \
+            -DEXTRA_CONF_FILE="boards/linux_native/$board.conf;boards/common/repeater.conf"
+        mv build/zephyr/zephcore_native_linux.exe firmware/zephcore_linux_"$board"-repeater-"$COMMIT_HASH"
     done
 fi
 

@@ -133,6 +133,48 @@ jobs:
         path: firmware
         key: cache-firmware-esp32-repeaters-${{ github.sha }}
 
+  build-linux:
+    needs: setup-zephyr
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '${{ env.python_version }}'
+        cache: 'pip'
+    - run: pip install -r requirements.txt
+
+    - uses: actions/cache/restore@v5
+      with:
+        path: modules
+        key: cache-zephyr-modules-${{ github.sha }}
+
+    - name: Setup Zephyr project
+      uses: zephyrproject-rtos/action-zephyr-setup@v1
+      with:
+        app-path: zephcore
+        toolchains: ${{ env.toolchains }}
+        sdk-version: ${{ env.zephyr_sdk }}
+
+    # native_sim presets are cross-compiled for the target SBC architecture:
+    # femtofox = ARMv7-A (32-bit), rak6421 / rak6421_pi5 = aarch64 (64-bit).
+    - name: Install cross-compile toolchains
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
+          gcc-aarch64-linux-gnu   g++-aarch64-linux-gnu
+
+    - name: build firmwares
+      run: bash build.sh linux
+
+    - uses: actions/cache@v5
+      with:
+        path: firmware
+        key: cache-firmware-linux-${{ github.sha }}
+
   build-esp32-companions:
     needs: setup-zephyr
     runs-on: ubuntu-latest
@@ -178,7 +220,7 @@ jobs:
         key: cache-firmware-esp32-companions-${{ github.sha }}
 
   create-release:
-    needs: [build-nrf, build-esp32-companions, build-esp32-repeaters]
+    needs: [build-nrf, build-esp32-companions, build-esp32-repeaters, build-linux]
     runs-on: ubuntu-latest
 
     steps:
@@ -202,6 +244,11 @@ jobs:
       with:
         path: firmware
         key: cache-firmware-esp32-repeaters-${{ github.sha }}
+
+    - uses: actions/cache/restore@v5
+      with:
+        path: firmware
+        key: cache-firmware-linux-${{ github.sha }}
 
     - name: upload firmware artifacts
       uses: actions/upload-artifact@v7
