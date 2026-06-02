@@ -109,7 +109,7 @@
 			rx-enable-gpios = <&zephcore_gpio0 24 GPIO_ACTIVE_HIGH>;
 			dio2-tx-enable;
 			dio3-tcxo-voltage = <SX126X_DIO3_TCXO_1V8>;
-			tcxo-power-startup-delay-ms = <10>;
+			tcxo-power-startup-delay-ms = <5>;
 		};
 	};
 };

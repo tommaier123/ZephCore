@@ -231,29 +231,7 @@ int gnl_line_set_value(gnl_line_t line, int value)
 	vals.mask = 1ULL;
 	vals.bits = value ? 1ULL : 0ULL;
 
-	int rc = ioctl(h->line_fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &vals);
-
-	/* DIAGNOSTIC (temporary): confirm output writes reach the kernel and
-	 * read the line back immediately to see if the drive physically took. */
-	{
-		static int dbgn;
-
-		if (dbgn < 40) {
-			dbgn++;
-			struct gpio_v2_line_values rb;
-
-			memset(&rb, 0, sizeof(rb));
-			rb.mask = 1ULL;
-			int grc = ioctl(h->line_fd, GPIO_V2_LINE_GET_VALUES_IOCTL, &rb);
-
-			fprintf(stderr,
-				"GNL set_value: off=%u fd=%d val=%d set_rc=%d errno=%d readback=%d (grc=%d)\n",
-				h->offset, h->line_fd, value, rc, rc < 0 ? errno : 0,
-				(grc == 0) ? (int)(rb.bits & 1ULL) : -1, grc);
-		}
-	}
-
-	if (rc < 0) {
+	if (ioctl(h->line_fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &vals) < 0) {
 		return -errno;
 	}
 	return 0;

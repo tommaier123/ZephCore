@@ -425,6 +425,13 @@ target_sources(app PRIVATE
   helpers/fatal_reboot.c
 )
 
+# Native-Linux (native_sim) runtime setup: force real-time clock mode so the
+# simulated clock tracks wall time (required for the real SX126x radio's
+# BUSY/DIO1 timing).  Bakes in the equivalent of the --rt command-line flag.
+if(CONFIG_ARCH_POSIX)
+  target_sources(app PRIVATE adapters/transport/linux_native_setup.c)
+endif()
+
 # ========== Radio Driver Selection ==========
 if(CONFIG_ZEPHCORE_RADIO_LR1110)
   message(STATUS "ZephCore Radio: LR1110 (Zephyr LoRa driver)")

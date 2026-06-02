@@ -167,9 +167,6 @@ static int gnl_pin_configure(const struct device *dev, gpio_pin_t pin,
 	k_mutex_lock(&data->mu, K_FOREVER);
 	data->pins[pin].cfg_flags = flags;
 	ret = rebuild_line(dev, pin);
-	LOG_WRN("pin_configure: dev=%p data=%p pin=%u flags=0x%x ret=%d requested=%d",
-		(void *)dev, (void *)data, pin, flags, ret,
-		data->pins[pin].requested);
 	k_mutex_unlock(&data->mu);
 
 	/* Wake the event thread to re-collect fds. */
@@ -184,9 +181,6 @@ static int gnl_port_get_raw(const struct device *dev, gpio_port_value_t *value)
 	struct gpio_native_linux_data *data = dev->data;
 	gpio_port_value_t v = 0;
 
-	static int dbgn;
-	bool dbg = dbgn < 20;
-
 	k_mutex_lock(&data->mu, K_FOREVER);
 	for (uint32_t i = 0; i < cfg->ngpios && i < GNL_MAX_PINS; i++) {
 		struct gnl_pin_state *p = &data->pins[i];
@@ -196,20 +190,11 @@ static int gnl_port_get_raw(const struct device *dev, gpio_port_value_t *value)
 		}
 		int x = gnl_line_get_value(p->line);
 
-		if (dbg) {
-			LOG_WRN("port_get_raw: pin %u requested, value=%d", i, x);
-		}
 		if (x > 0) {
 			v |= ((gpio_port_value_t)1U << i);
 		}
 	}
 	k_mutex_unlock(&data->mu);
-
-	if (dbg) {
-		LOG_WRN("port_get_raw: dev=%p data=%p portval=0x%08x",
-			(void *)dev, (void *)data, (uint32_t)v);
-		dbgn++;
-	}
 
 	*value = v;
 	return 0;
