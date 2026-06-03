@@ -9,6 +9,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* Maximum companion transport frame size.
+ * +4 over the base 172 to accommodate transport codes (region scoping). */
+#define MAX_FRAME_SIZE  176
+
 #ifdef __cplusplus
 extern "C" {
 #endif

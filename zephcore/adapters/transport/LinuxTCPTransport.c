@@ -41,13 +41,6 @@
 
 LOG_MODULE_REGISTER(linux_tcp_transport, LOG_LEVEL_INF);
 
-/* Keep in sync with MAX_FRAME_SIZE in CompanionMesh.h. ZephyrBLE.cpp
- * uses the same constant; we mirror it here so a single transport build
- * doesn't have to pull the C++ header. */
-#ifndef MAX_FRAME_SIZE
-#define MAX_FRAME_SIZE 172
-#endif
-
 #define FRAME_QUEUE_SIZE CONFIG_ZEPHCORE_BLE_QUEUE_SIZE
 #define LISTEN_PORT      CONFIG_ZEPHCORE_LINUX_TCP_PORT
 #define LISTEN_BACKLOG   1

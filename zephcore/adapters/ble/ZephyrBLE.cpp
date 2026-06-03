@@ -26,11 +26,6 @@ LOG_MODULE_REGISTER(zephcore_ble, CONFIG_ZEPHCORE_BLE_LOG_LEVEL);
 
 #include "ZephyrBLE.h"
 
-/* MAX_FRAME_SIZE from CompanionMesh.h — keep in sync */
-#ifndef MAX_FRAME_SIZE
-#define MAX_FRAME_SIZE 172
-#endif
-
 /* ========== Constants ========== */
 
 #define DEVICE_NAME_MAX 29

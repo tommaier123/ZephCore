@@ -36,8 +36,10 @@
 #define AUTO_ADD_ROOM_SERVER       (1 << 3)
 #define AUTO_ADD_SENSOR            (1 << 4)
 
-/* Max BLE frame size — must match NUS MTU negotiated size */
-#define MAX_FRAME_SIZE 172
+/* Canonical definition is in ZephyrBLE.h; guard here for TUs that don't include it */
+#ifndef MAX_FRAME_SIZE
+#define MAX_FRAME_SIZE  176
+#endif
 
 /* 1 header + 32 pubkey + 1 type + 1 flags + 1 path_len + 64 path + 32 name + 4*4 fields = 148 */
 #define CONTACT_FRAME_SIZE 148
