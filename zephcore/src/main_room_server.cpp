@@ -33,8 +33,18 @@ extern "C" void bt_ctlr_assert_handle(char *file, uint32_t line)
 }
 #endif
 
-/* USB CDC ACM init + 1200-baud DFU + DTR callbacks (shared with companion) */
-#if !IS_ENABLED(CONFIG_CDC_ACM_SERIAL_INITIALIZE_AT_BOOT)
+/* USB CDC ACM init + 1200-baud DFU + DTR callbacks (shared with companion).
+ *
+ * Gate on the CDC-ACM class driver, NOT on DT_HAS_COMPAT_STATUS_OKAY alone: a
+ * board overlay may expose a cdc_acm_uart DT node unconditionally (the shared
+ * esp32s3_usb_otg.dtsi does), so the node can be present while the class driver
+ * — and therefore zephcore_usbd_* and the device object — is not compiled
+ * (e.g. an ESP32-S3 build without esp32s3_usb.conf). This mirrors the CMake
+ * condition that compiles ZephyrUSBCDC.cpp. */
+#define ZEPHCORE_USB_STACK \
+	(IS_ENABLED(CONFIG_USB_CDC_ACM) || IS_ENABLED(CONFIG_USBD_CDC_ACM_CLASS))
+
+#if ZEPHCORE_USB_STACK && !IS_ENABLED(CONFIG_CDC_ACM_SERIAL_INITIALIZE_AT_BOOT)
 #include <ZephyrUSBCDC.h>
 #endif
 
@@ -406,10 +416,9 @@ int main(void)
 	 * host to open the port (DTR asserted) — event-driven via the usbd
 	 * message callback.  Unplugged → 2 s timeout, no banner; attached →
 	 * banner reaches the user the moment the port opens. */
-#if !IS_ENABLED(CONFIG_CDC_ACM_SERIAL_INITIALIZE_AT_BOOT) && DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart)
+#if ZEPHCORE_USB_STACK && DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart) && \
+	!IS_ENABLED(CONFIG_CDC_ACM_SERIAL_INITIALIZE_AT_BOOT)
 	zephcore_usbd_init();
-#endif
-#if DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart)
 	zephcore_usbd_wait_dtr(2000);
 #endif
 	LOG_INF("=== ZephCore Room Server starting ===");
@@ -539,10 +548,12 @@ int main(void)
 
 	/* USB CDC was initialized earlier (right after clearBootloaderMagic).
 	 * Just acquire the device handle for the CLI's UART IRQ binding below. */
-#if DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart)
+#if ZEPHCORE_USB_STACK && DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart)
 	usb_dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
 #else
-	/* No CDC ACM (e.g. ESP32 usb_serial) — use chosen console UART */
+	/* No CDC ACM class driver (e.g. ESP32 usb_serial, or an ESP32-S3 build
+	 * without esp32s3_usb.conf where the cdc_acm DT node exists but the class
+	 * isn't compiled) — use the chosen console UART. */
 	usb_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 #endif
 	if (device_is_ready(usb_dev)) {

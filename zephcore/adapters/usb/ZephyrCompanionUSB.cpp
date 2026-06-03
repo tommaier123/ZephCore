@@ -221,7 +221,13 @@ void zephcore_usb_companion_init(struct k_event *mesh_events,
 
 	s_rx_work = rx_work;
 
-#if DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart)
+	/* The cdc_acm_uart DT node may be present without the class driver compiled
+	 * (shared esp32s3_usb_otg.dtsi exposes the node unconditionally; the class is
+	 * only enabled with esp32s3_usb.conf). Gate the device-get on the class too,
+	 * else DEVICE_DT_GET_ONE references an undefined device ordinal on, e.g., a
+	 * debug ESP32-S3 companion (CONFIG_LOG=y) built without esp32s3_usb.conf. */
+#if DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart) && \
+	(IS_ENABLED(CONFIG_USB_CDC_ACM) || IS_ENABLED(CONFIG_USBD_CDC_ACM_CLASS))
 	usb_dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
 	if (device_is_ready(usb_dev)) {
 		LOG_INF("USB CDC device ready: %s", usb_dev->name);

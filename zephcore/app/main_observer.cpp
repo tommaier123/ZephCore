@@ -20,6 +20,14 @@
 
 #define CLI_REPLY_SIZE 256
 
+/* The CDC-ACM device object exists only when the class driver is compiled.
+ * A board overlay may expose a cdc_acm_uart DT node unconditionally (the shared
+ * esp32s3_usb_otg.dtsi does), so gate the device-get on the Kconfig class, not
+ * on DT_HAS_COMPAT_STATUS_OKAY alone, or DEVICE_DT_GET_ONE references an
+ * undefined device ordinal (e.g. an ESP32-S3 observer without esp32s3_usb.conf). */
+#define ZEPHCORE_USB_STACK \
+	(IS_ENABLED(CONFIG_USB_CDC_ACM) || IS_ENABLED(CONFIG_USBD_CDC_ACM_CLASS))
+
 LOG_MODULE_REGISTER(zephcore_observer_main, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 
 #include <app/RepeaterDataStore.h>
@@ -301,10 +309,11 @@ int main(void)
 	}
 
 	/* Initialize USB serial for CLI */
-#if DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart)
+#if ZEPHCORE_USB_STACK && DT_HAS_COMPAT_STATUS_OKAY(zephyr_cdc_acm_uart)
 	usb_dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
 #else
-	/* ESP32 native USB or other console UART */
+	/* ESP32 native USB / other console UART, or a cdc_acm DT node present
+	 * without the class driver compiled — fall back to the chosen console. */
 	usb_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 #endif
 	if (device_is_ready(usb_dev)) {

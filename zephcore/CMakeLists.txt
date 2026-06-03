@@ -551,6 +551,16 @@ elseif(CONFIG_ZEPHCORE_ROLE_ROOM_SERVER)
     helpers/TransportKeyStore.cpp
     helpers/CommonCLI.cpp
   )
+  # Headless build (e.g. native-Linux SBC): no display/buttons/buzzer, so the
+  # real ui_* implementation (helpers/ui-button or helpers/ui-joystick) isn't
+  # compiled. main_room_server.cpp calls ui_* unconditionally — pull in the weak
+  # no-op stubs to satisfy the link. Mirrors the repeater/observer branches.
+  if(NOT CONFIG_ZEPHCORE_UI_DESIGN_BUTTON AND NOT CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+    target_sources(app PRIVATE helpers/ui/ui_headless_stubs.c)
+    target_include_directories(app PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/helpers/ui
+    )
+  endif()
   # Shared USBD CDC ACM init + 1200-baud DFU + DTR event/callback module.
   if(NOT CONFIG_CDC_ACM_SERIAL_INITIALIZE_AT_BOOT AND (CONFIG_USB_CDC_ACM OR CONFIG_USBD_CDC_ACM_CLASS))
     target_sources(app PRIVATE
