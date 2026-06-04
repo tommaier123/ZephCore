@@ -149,7 +149,7 @@ void CommonCLI::loadPrefs(const char* path) {
     }
 #endif
     _prefs->multi_acks = constrain(_prefs->multi_acks, (uint8_t)0, (uint8_t)1);
-    _prefs->adc_multiplier = constrain(_prefs->adc_multiplier, 0.0f, 10.0f);
+    _prefs->adc_multiplier = constrain(_prefs->adc_multiplier, 0.0f, 30000.0f);
     _prefs->path_hash_mode = constrain(_prefs->path_hash_mode, (uint8_t)0, (uint8_t)2);
     _prefs->powersaving_enabled = constrain(_prefs->powersaving_enabled, (uint8_t)0, (uint8_t)1);
     _prefs->gps_enabled = constrain(_prefs->gps_enabled, (uint8_t)0, (uint8_t)1);
@@ -794,17 +794,73 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             } else {
                 strcpy(reply, "Error: range 150-2500 MHz");
             }
+        } else if (strcmp(config, "adc.multiplier target") == 0) {
+            strcpy(reply, "Error: need mV target  (e.g. set adc.multiplier target 4173)");
+        } else if (memcmp(config, "adc.multiplier target ", 22) == 0) {
+            /* Calibrate against a known voltage measured with a multimeter. */
+            uint16_t target_mv = (uint16_t)atoi(&config[22]);
+            uint16_t current_mv = _board->getBattMilliVolts();
+            if (current_mv == 0) {
+                strcpy(reply, "Error: no ADC reading on this board");
+            } else if (target_mv < 3000 || target_mv > 4400) {
+                strcpy(reply, "Error: target out of range (3000-4400 mV)");
+            } else {
+                float current_mult = _board->getAdcMultiplier();
+                float new_mult = current_mult * (float)target_mv / (float)current_mv;
+                _prefs->adc_multiplier = new_mult;
+                if (_board->setAdcMultiplier(new_mult)) {
+                    savePrefs();
+                    snprintf(reply, CLI_REPLY_SIZE,
+                             "OK - multiplier %.3f -> %.3f  (%u -> %u mV)",
+                             (double)current_mult, (double)new_mult,
+                             current_mv, target_mv);
+                } else {
+                    _prefs->adc_multiplier = 0.0f;
+                    strcpy(reply, "Error: unsupported by this board");
+                }
+            }
+        } else if (memcmp(config, "adc.multiplier full", 19) == 0) {
+            /* Calibrate: board must be on a full charge. Scales the current
+             * multiplier so the ADC reads the board's curve 100% point. */
+            uint16_t current_mv = _board->getBattMilliVolts();
+            if (current_mv == 0) {
+                strcpy(reply, "Error: no ADC reading on this board");
+            } else {
+                uint16_t target_mv = battery_curve_default.ocv_mv[0];
+                float current_mult = _board->getAdcMultiplier();
+                float new_mult = current_mult * (float)target_mv / (float)current_mv;
+                _prefs->adc_multiplier = new_mult;
+                if (_board->setAdcMultiplier(new_mult)) {
+                    savePrefs();
+                    snprintf(reply, CLI_REPLY_SIZE,
+                             "OK - multiplier %.3f -> %.3f  (%u -> %u mV)",
+                             (double)current_mult, (double)new_mult,
+                             current_mv, target_mv);
+                } else {
+                    _prefs->adc_multiplier = 0.0f;
+                    strcpy(reply, "Error: unsupported by this board");
+                }
+            }
         } else if (memcmp(config, "adc.multiplier ", 15) == 0) {
-            _prefs->adc_multiplier = atof(&config[15]);
-            if (_board->setAdcMultiplier(_prefs->adc_multiplier)) {
+            const char *arg = &config[15];
+            float val = atof(arg);
+            /* Reject non-numeric, NaN, inf, negative, and out-of-range values.
+             * 0 is valid (resets to DTS default). Upper bound covers all real
+             * divider/reference combinations with margin. */
+            bool bad = (val != 0.0f && val < 100.0f) || val > 30000.0f || val < 0.0f;
+            /* atof returns 0 for non-numeric strings — distinguish from literal "0" */
+            if (val == 0.0f && arg[0] != '0') bad = true;
+            if (bad) {
+                strcpy(reply, "Error: invalid multiplier (0 to reset, or 100-30000)");
+            } else if (_board->setAdcMultiplier(val)) {
+                _prefs->adc_multiplier = val;
                 savePrefs();
-                if (_prefs->adc_multiplier == 0.0f) {
+                if (val == 0.0f) {
                     strcpy(reply, "OK - using default board multiplier");
                 } else {
-                    snprintf(reply, CLI_REPLY_SIZE, "OK - multiplier set to %.3f", (double)_prefs->adc_multiplier);
+                    snprintf(reply, CLI_REPLY_SIZE, "OK - multiplier set to %.3f", (double)val);
                 }
             } else {
-                _prefs->adc_multiplier = 0.0f;
                 strcpy(reply, "Error: unsupported by this board");
             }
         } else if (memcmp(config, "radio.rxgain ", 13) == 0) {
