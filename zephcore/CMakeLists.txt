@@ -698,6 +698,7 @@ endif()
 if(CONFIG_ZEPHCORE_UI_DESIGN_BUTTON)
   target_sources(app PRIVATE
     helpers/ui-button/ui_task.c
+    helpers/ui-button/time_sync.c
   )
   target_include_directories(app PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/helpers/ui-button

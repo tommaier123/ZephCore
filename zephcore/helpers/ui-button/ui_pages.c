@@ -18,6 +18,7 @@
 #include "ui_task.h"
 #include "display.h"
 
+#include <time_sync.h>
 #include <ZephyrSensorManager.h>
 
 #include <zephyr/kernel.h>
@@ -123,49 +124,72 @@ static uint8_t calc_battery_pct(uint16_t mv)
 
 /* ========== Helper: Top Bar (Node Name + Battery) ========== */
 
+/* One-char tag for where the displayed clock was last freshly synced from
+ * (see time_sync_get_source() for the freshness window). Always returns a
+ * letter — falls back to 'L' (local) when no recent external sync. */
+static char time_source_tag(enum time_sync_source src)
+{
+	switch (src) {
+	case TIME_SYNC_GPS:  return 'G';  /* GPS fix */
+	case TIME_SYNC_APP:  return 'A';  /* phone/companion app */
+	case TIME_SYNC_WIFI: return 'N';  /* network (SNTP) */
+	default:             return 'L';  /* local: manual/CLI or stale/none */
+	}
+}
+
 static void render_top_bar(void)
 {
-	/* Node name on the left */
-	if (state.node_name[0]) {
-		/* Truncate to fit left side (leave room for battery) */
-		char name[16];
+	/* Right side: "HH:MM<S> XX%" — clock (with 1-char source tag) then
+	 * battery, right-aligned.  Built first so the node name can be clipped
+	 * to the space that remains on the left, preventing overlap. */
+	char right[16] = "";
+	int pos = 0;
 
-		strncpy(name, state.node_name, sizeof(name) - 1);
-		name[sizeof(name) - 1] = '\0';
-		mc_display_text(0, TOP_BAR_Y, name, false);
+	/* 24h clock from RTC epoch (only if time has been synced).
+	 * Before sync, getCurrentTime() returns bare uptime (~seconds),
+	 * so check for a sane epoch (after Jan 1 2025 = 1735689600). */
+	if (state.rtc_epoch > 1735689600) {
+		uint32_t day_sec = state.rtc_epoch % 86400;
+		uint8_t hh = day_sec / 3600;
+		uint8_t mm = (day_sec % 3600) / 60;
+
+		/* Source tag: G=GPS, A=app, N=network, L=local (always set). */
+		char src = time_source_tag(time_sync_get_source());
+
+		pos = snprintf(right, sizeof(right), "%02u:%02u%c ", hh, mm, src);
 	}
 
-	/* Right side: "HH:MM XX%" — clock then battery, right-aligned */
-	{
-		char right[16] = "";
-		int pos = 0;
+	/* Battery percentage */
+	if (state.battery_mv > 0) {
+		uint8_t pct = state.battery_pct;
 
-		/* 24h clock from RTC epoch (only if time has been synced).
-		 * Before sync, getCurrentTime() returns bare uptime (~seconds),
-		 * so check for a sane epoch (after Jan 1 2025 = 1735689600). */
-		if (state.rtc_epoch > 1735689600) {
-			uint32_t day_sec = state.rtc_epoch % 86400;
-			uint8_t hh = day_sec / 3600;
-			uint8_t mm = (day_sec % 3600) / 60;
-
-			pos = snprintf(right, sizeof(right), "%02u:%02u ", hh, mm);
+		if (pct == 0) {
+			pct = calc_battery_pct(state.battery_mv);
 		}
+		snprintf(right + pos, sizeof(right) - pos, "%u%%", pct);
+	}
 
-		/* Battery percentage */
-		if (state.battery_mv > 0) {
-			uint8_t pct = state.battery_pct;
+	int right_x = DISP_W;
+	if (right[0]) {
+		right_x = DISP_W - ((int)strlen(right) * FONT_W);
+		mc_display_text(right_x, TOP_BAR_Y, right, false);
+	}
 
-			if (pct == 0) {
-				pct = calc_battery_pct(state.battery_mv);
-			}
-			snprintf(right + pos, sizeof(right) - pos, "%u%%", pct);
+	/* Node name on the left, clipped to the gap before the right block
+	 * (one char-width of padding so it never touches the clock). */
+	if (state.node_name[0]) {
+		char name[16];
+		int max_chars = (right_x - FONT_W) / FONT_W;
+
+		if (max_chars > (int)sizeof(name) - 1) {
+			max_chars = sizeof(name) - 1;
 		}
-
-		if (right[0]) {
-			int x = DISP_W - ((int)strlen(right) * FONT_W);
-
-			mc_display_text(x, TOP_BAR_Y, right, false);
+		if (max_chars < 0) {
+			max_chars = 0;
 		}
+		strncpy(name, state.node_name, max_chars);
+		name[max_chars] = '\0';
+		mc_display_text(0, TOP_BAR_Y, name, false);
 	}
 }
 

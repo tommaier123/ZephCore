@@ -19,10 +19,14 @@ enum time_sync_source {
 	TIME_SYNC_CLI,
 };
 
-#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK) || \
+    IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_BUTTON)
 
 void time_sync_report(enum time_sync_source src);
-const char *time_sync_display_label(void);
+
+/* Current effective time source (prefers live GPS sync). TIME_SYNC_NONE
+ * if the RTC has never been set. */
+enum time_sync_source time_sync_get_source(void);
 
 #else
 
@@ -31,7 +35,16 @@ static inline void time_sync_report(enum time_sync_source src)
 	ARG_UNUSED(src);
 }
 
-#endif /* CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK */
+static inline enum time_sync_source time_sync_get_source(void)
+{
+	return TIME_SYNC_NONE;
+}
+
+#endif /* CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK || _BUTTON */
+
+#if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
+const char *time_sync_display_label(void);
+#endif
 
 #ifdef __cplusplus
 }

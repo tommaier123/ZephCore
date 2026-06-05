@@ -5,6 +5,7 @@
 
 #include "CommonCLI.h"
 #include "battery_curve.h"
+#include <helpers/time_sync.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/AdvertDataHelpers.h>
 #include <adapters/board/ZephyrBoard.h>
@@ -331,6 +332,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         uint32_t curr = getRTCClock()->getCurrentTime();
         if (sender_timestamp > curr) {
             getRTCClock()->setCurrentTime(sender_timestamp + 1);
+            time_sync_report(TIME_SYNC_CLI);
             uint32_t now = getRTCClock()->getCurrentTime();
             time_t t = (time_t)now;
             struct tm *tm = gmtime(&t);
@@ -350,6 +352,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
         uint32_t curr = getRTCClock()->getCurrentTime();
         if (secs > curr) {
             getRTCClock()->setCurrentTime(secs);
+            time_sync_report(TIME_SYNC_CLI);
             time_t t = (time_t)secs;
             struct tm *tm = gmtime(&t);
             snprintf(reply, CLI_REPLY_SIZE, "OK - clock set: %02d:%02d - %d/%d/%d UTC",

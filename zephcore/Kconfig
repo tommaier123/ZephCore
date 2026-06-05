@@ -620,6 +620,18 @@ config ZEPHCORE_UI_DISPLAY_AUTO_OFF_MS
 	  Time in milliseconds before the display turns off
 	  after the last user interaction. Set to 0 to disable.
 
+config ZEPHCORE_UI_TIME_SOURCE_FRESH_HOURS
+	int "Clock source tag freshness window (hours)"
+	default 12
+	help
+	  The top-bar clock shows a one-character source tag: G (GPS),
+	  A (app), N (network/SNTP). If the most recent sync from one of
+	  those sources is older than this many hours, the tag falls back
+	  to L (local) — the RTC is free-running on its own oscillator.
+	  Set to 0 to keep the last external source tag indefinitely
+	  (no freshness expiry). Drift on a 50 ppm crystal is ~4 s/day,
+	  so this is a trust/freshness signal, not an accuracy limit.
+
 config ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS
 	int "Low-battery auto-shutdown threshold (mV, 0 = disabled)"
 	default 3300 if SOC_SERIES_NRF52
