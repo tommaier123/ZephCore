@@ -28,7 +28,9 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.15.9-zephyr"
+  // Real version injected by CMakeLists.txt (-DFIRMWARE_VERSION); this fallback
+  // only applies to builds that bypass that injection and should never surface.
+  #define FIRMWARE_VERSION   "v0.0.0-dev"
 #endif
 
 #ifndef FIRMWARE_BUILD_DATE

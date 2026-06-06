@@ -394,6 +394,14 @@ project(zephcore)
 string(TIMESTAMP ZEPHCORE_BUILD_DATE "%Y %b %d" UTC)
 add_definitions(-DFIRMWARE_BUILD_DATE="${ZEPHCORE_BUILD_DATE}")
 
+# Single source of truth for the firmware version string (vMAJOR.MINOR.PATCH-zephyr).
+# Injected globally like FIRMWARE_BUILD_DATE above, so every app TU sees the same
+# value; the per-app `#ifndef FIRMWARE_VERSION` fallbacks only apply to builds that
+# bypass this injection. NOTE: the BLE DIS value in boards/common/zephcore_common.conf
+# (CONFIG_BT_DIS_FW_REV_STR) is Kconfig, not C, so it must be bumped here AND there.
+set(ZEPHCORE_FIRMWARE_VERSION "v1.16.0-zephyr")
+add_definitions(-DFIRMWARE_VERSION="${ZEPHCORE_FIRMWARE_VERSION}")
+
 add_subdirectory(lib/monocypher)
 target_link_libraries(app PRIVATE monocypher)
 

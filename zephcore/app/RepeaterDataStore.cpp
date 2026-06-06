@@ -195,6 +195,10 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
     fs_read(&file, &prefs.rx_duty_cycle, sizeof(prefs.rx_duty_cycle));
     fs_read(&file, &prefs.apc_enabled, sizeof(prefs.apc_enabled));
     fs_read(&file, &prefs.apc_margin, sizeof(prefs.apc_margin));
+    /* Flood hop-ceiling extensions (absent in <296-byte files; the no-op EOF
+     * read leaves the constructor defaults flood_max_unscoped=64, flood_max_advert=8). */
+    fs_read(&file, &prefs.flood_max_unscoped, sizeof(prefs.flood_max_unscoped));
+    fs_read(&file, &prefs.flood_max_advert, sizeof(prefs.flood_max_advert));
 
     fs_close(&file);
 
@@ -234,7 +238,7 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
         prefs.path_hash_mode = 1;
         prefs.loop_detect = LOOP_DETECT_MODERATE;
         savePrefs(prefs);
-        LOG_INF("loadPrefs: upgraded prefs format (%d -> 294 bytes)", (int)entry.size);
+        LOG_INF("loadPrefs: upgraded prefs format (%d -> 296 bytes)", (int)entry.size);
     }
 
     /* One-time migration: disable RX duty cycle if it was previously enabled. */
@@ -313,6 +317,9 @@ bool RepeaterDataStore::savePrefs(const NodePrefs& prefs) {
     fs_write(&file, &prefs.rx_duty_cycle, sizeof(prefs.rx_duty_cycle));
     fs_write(&file, &prefs.apc_enabled, sizeof(prefs.apc_enabled));
     fs_write(&file, &prefs.apc_margin, sizeof(prefs.apc_margin));
+    /* Flood hop-ceiling extensions (extend the format past 294 bytes) */
+    fs_write(&file, &prefs.flood_max_unscoped, sizeof(prefs.flood_max_unscoped));
+    fs_write(&file, &prefs.flood_max_advert, sizeof(prefs.flood_max_advert));
 
     ret = fs_sync(&file);
     fs_close(&file);

@@ -19,6 +19,11 @@
 #define MAX_CONTACTS  32
 #endif
 
+/* Headroom for transient "anon" contacts (type ADV_TYPE_NONE) created to service
+ * non-contact requests (CMD_SEND_ANON_REQ to a pubkey not in the contact list).
+ * These are never persisted or synced to the app. Mirrors upstream. */
+#define MAX_ANON_CONTACTS  8
+
 #ifdef CONFIG_ZEPHCORE_MAX_CHANNELS
 #define MAX_GROUP_CHANNELS  CONFIG_ZEPHCORE_MAX_CHANNELS
 #else
@@ -78,9 +83,9 @@ public:
 class BaseChatMesh : public mesh::Mesh {
 	friend class ContactsIterator;
 
-	ContactInfo contacts[MAX_CONTACTS];
+	ContactInfo contacts[MAX_CONTACTS + MAX_ANON_CONTACTS];
 	int num_contacts;
-	int sort_array[MAX_CONTACTS];
+	int sort_array[MAX_CONTACTS + MAX_ANON_CONTACTS];
 	int matching_peer_indexes[MAX_SEARCH_RESULTS];
 	unsigned long txt_send_timeout;
 
@@ -117,7 +122,7 @@ protected:
 	void bootstrapRTCfromContacts();
 	void resetContacts() { num_contacts = 0; }
 	void populateContactFromAdvert(ContactInfo &ci, const mesh::Identity &id, const AdvertDataParser &parser, uint32_t timestamp);
-	ContactInfo *allocateContactSlot();
+	ContactInfo *allocateContactSlot(bool transient_only = false);
 
 	// UI concepts for subclasses to implement
 	virtual bool isAutoAddEnabled() const { return true; }

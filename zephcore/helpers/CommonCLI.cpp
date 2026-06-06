@@ -116,6 +116,7 @@ void CommonCLI::loadPrefs(const char* path) {
     ok = ok && prefs_read(&file, &_prefs->apc_enabled, sizeof(_prefs->apc_enabled));         // 292
     ok = ok && prefs_read(&file, &_prefs->apc_margin, sizeof(_prefs->apc_margin));           // 293
     ok = ok && prefs_read(&file, &_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped)); // 294
+    ok = ok && prefs_read(&file, &_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert)); // 295
 
     if (!ok) {
         LOG_WRN("Prefs file %s truncated, some fields use defaults", path);
@@ -160,6 +161,7 @@ void CommonCLI::loadPrefs(const char* path) {
     _prefs->apc_enabled = constrain(_prefs->apc_enabled, (uint8_t)0, (uint8_t)1);
     _prefs->apc_margin = constrain(_prefs->apc_margin, (uint8_t)6, (uint8_t)30);
     _prefs->flood_max_unscoped = constrain(_prefs->flood_max_unscoped, (uint8_t)0, (uint8_t)64);
+    _prefs->flood_max_advert = constrain(_prefs->flood_max_advert, (uint8_t)0, (uint8_t)64);
 
     LOG_INF("Loaded prefs from %s", path);
 }
@@ -226,6 +228,7 @@ void CommonCLI::savePrefs(const char* path) {
     fs_write(&file, &_prefs->apc_enabled, sizeof(_prefs->apc_enabled));
     fs_write(&file, &_prefs->apc_margin, sizeof(_prefs->apc_margin));
     fs_write(&file, &_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));
+    fs_write(&file, &_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));
 
     fs_close(&file);
     LOG_INF("Saved prefs to %s", path);
@@ -451,6 +454,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
                      (double)est, (double)ff);
         } else if (memcmp(config, "apc.margin", 10) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %d dB", (int)_callbacks->getAPCTargetMargin());
+        } else if (memcmp(config, "flood.max.advert", 16) == 0) {
+            snprintf(reply, CLI_REPLY_SIZE, "> %u", (uint32_t)_prefs->flood_max_advert);
         } else if (memcmp(config, "flood.max.unscoped", 18) == 0) {
             snprintf(reply, CLI_REPLY_SIZE, "> %u", (uint32_t)_prefs->flood_max_unscoped);
         } else if (memcmp(config, "flood.max", 9) == 0) {
@@ -679,6 +684,15 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             _prefs->tx_delay_factor = atof(&config[8]);
             savePrefs();
             strcpy(reply, "OK (ignored: txdelay is now adaptive)");
+        } else if (memcmp(config, "flood.max.advert ", 17) == 0) {
+            int m = atoi(&config[17]);
+            if (m >= 0 && m <= 64) {
+                _prefs->flood_max_advert = (uint8_t)m;
+                savePrefs();
+                strcpy(reply, "OK");
+            } else {
+                strcpy(reply, "Error: range 0-64");
+            }
         } else if (memcmp(config, "flood.max.unscoped ", 19) == 0) {
             int m = atoi(&config[19]);
             if (m >= 0 && m <= 64) {

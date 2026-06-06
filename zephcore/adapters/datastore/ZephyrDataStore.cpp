@@ -7,6 +7,7 @@
  */
 
 #include "ZephyrDataStore.h"
+#include <AdvertDataHelpers.h>   // ADV_TYPE_NONE (transient/anon contacts)
 #include <zephyr/fs/fs.h>
 #include <zephyr/fs/littlefs.h>
 #include <zephyr/storage/flash_map.h>
@@ -702,18 +703,25 @@ void ZephyrDataStore::saveContacts(DataStoreHost *host)
 
 	struct fs_file_t file;
 	uint8_t rec[CONTACT_DATA_SZ];
-	uint32_t idx = 0;
+	uint32_t idx = 0;       // contacts iterated (incl. skipped anon)
+	uint32_t written = 0;   // records actually written to the file
 	ContactInfo c;
 	bool write_ok = true;
 
 	auto write_contacts = [&](struct fs_file_t *dst) -> bool {
 		while (host->getContactForSave(idx, c)) {
+			// Don't persist transient/anon contacts (non-contact requests)
+			if (c.type == ADV_TYPE_NONE) {
+				idx++;
+				continue;
+			}
 			contact_to_record(c, rec);
 			if (fs_write(dst, rec, CONTACT_DATA_SZ) != (ssize_t)CONTACT_DATA_SZ) {
 				LOG_ERR("saveContacts: write failed at record %u", idx);
 				return false;
 			}
 			idx++;
+			written++;
 		}
 		return true;
 	};
@@ -749,7 +757,7 @@ void ZephyrDataStore::saveContacts(DataStoreHost *host)
 		return;
 	}
 	LOG_INF("saveContacts: mode=%s saved %u contacts to %s (%u bytes)",
-		save_mode, idx, path, idx * CONTACT_DATA_SZ);
+		save_mode, written, path, written * CONTACT_DATA_SZ);
 }
 
 /* ── Channels ──────────────────────────────────────────────────────── */

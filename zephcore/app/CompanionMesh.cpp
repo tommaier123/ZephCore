@@ -552,8 +552,9 @@ bool CompanionMesh::continueContactIteration()
 	if (_contact_iter_idx < getNumContacts()) {
 		ContactInfo c;
 		if (getContactByIdx(_contact_iter_idx, c)) {
+			// Skip transient/anon contacts (ADV_TYPE_NONE) — never synced to the app.
 			// Apply 'since' filter - only send contacts modified after the timestamp
-			if (c.lastmod > _contact_iter_since) {
+			if (c.type != ADV_TYPE_NONE && c.lastmod > _contact_iter_since) {
 				if (c.lastmod > _contact_iter_lastmod) {
 					_contact_iter_lastmod = c.lastmod;
 				}
@@ -2226,6 +2227,9 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 			#ifndef FIRMWARE_BUILD_DATE
 			#define FIRMWARE_BUILD_DATE __DATE__
 			#endif
+			#ifndef FIRMWARE_VERSION
+			#define FIRMWARE_VERSION "v0.0.0-dev"  // real value injected by CMakeLists.txt
+			#endif
 			/* Wire format reserves 40 bytes for the board name. Require room
 			 * for a null terminator within those 40 bytes so a phone parsing
 			 * it as a C-string never reads past the field. */
@@ -2233,10 +2237,10 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 				"CONFIG_ZEPHCORE_BOARD_NAME must fit in 40 bytes including null terminator");
 			static const uint8_t fw_build[12] = FIRMWARE_BUILD_DATE;
 			static const uint8_t model[40] = CONFIG_ZEPHCORE_BOARD_NAME;
-			static const uint8_t version[20] = "v1.15.9-zephyr";
+			static const uint8_t version[20] = FIRMWARE_VERSION;  // injected by CMakeLists.txt
 			uint8_t rsp[82];
 			rsp[0] = PACKET_DEVICE_INFO;
-			rsp[1] = 12;  // FIRMWARE_VER_CODE - v12 = CMD_SET_FLOOD_SCOPE_KEY [0x36, 0x01] unscoped variant
+			rsp[1] = 13;  // FIRMWARE_VER_CODE - v13 = CMD_SEND_ANON_REQ to non-contact pubkey (transient anon contacts)
 			rsp[2] = (MAX_CONTACTS / 2 > 255) ? 255 : (MAX_CONTACTS / 2);  // protocol byte, app multiplies by 2
 			rsp[3] = MAX_GROUP_CHANNELS;
 			put_le32(&rsp[4], prefs.ble_pin ? prefs.ble_pin : 123456);  // BLE PIN
@@ -2952,6 +2956,19 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 	case CMD_SEND_ANON_REQ:
 		if (len >= 1 + PUB_KEY_SIZE + 1) {
 			ContactInfo *contact = lookupContactByPubKey(&data[1], PUB_KEY_SIZE);
+			if (contact == nullptr) {
+				/* FIRMWARE_VER_CODE 13+: allow requests to a non-contact pubkey by
+				 * creating a transient "anon" contact (ADV_TYPE_NONE). These are never
+				 * persisted or synced to the app; re-lookup to get the stable slot. */
+				ContactInfo anon;
+				memset(&anon, 0, sizeof(anon));
+				memcpy(anon.id.pub_key, &data[1], PUB_KEY_SIZE);
+				anon.out_path_len = 0;       // zero-hop direct by default
+				anon.type = ADV_TYPE_NONE;   // transient/unknown
+				if (addContact(anon)) {
+					contact = lookupContactByPubKey(&data[1], PUB_KEY_SIZE);
+				}
+			}
 			if (contact) {
 				uint32_t tag, est_timeout;
 				int result = sendAnonReq(*contact, &data[1 + PUB_KEY_SIZE], len - 1 - PUB_KEY_SIZE, tag, est_timeout);
@@ -2963,7 +2980,7 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 					sendPacketError(ERR_BAD_STATE);
 				}
 			} else {
-				sendPacketError(ERR_NOT_FOUND);
+				sendPacketError(ERR_TABLE_FULL);
 			}
 		} else {
 			sendPacketError(ERR_ILLEGAL_ARG);

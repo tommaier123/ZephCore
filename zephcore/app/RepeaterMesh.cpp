@@ -532,6 +532,8 @@ bool RepeaterMesh::allowPacketForward(const mesh::Packet* packet) {
         if (packet->getPathHashCount() >= _prefs.flood_max) return false;
         // un-scoped floods can be clamped to a lower hop limit than scoped (transport) floods
         if (packet->getRouteType() == ROUTE_TYPE_FLOOD && packet->getPathHashCount() >= _prefs.flood_max_unscoped) return false;
+        // ADVERT floods get their own (typically tighter) hop ceiling to curb advert churn
+        if (packet->getPayloadType() == PAYLOAD_TYPE_ADVERT && packet->getPathHashCount() >= _prefs.flood_max_advert) return false;
     }
     if (packet->isRouteFlood() && recv_pkt_region == nullptr) return false;
     if (packet->isRouteFlood() && _prefs.loop_detect != LOOP_DETECT_OFF) {
