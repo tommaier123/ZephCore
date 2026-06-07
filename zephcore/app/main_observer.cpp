@@ -17,6 +17,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/sys/ring_buffer.h>
+#include <zephyr/logging/log.h>
 
 #define CLI_REPLY_SIZE 256
 

@@ -941,7 +941,14 @@ void JoystickUITask::toggleLeds()
 
 void JoystickUITask::rebootToDFU()
 {
-	mesh_reboot_to_ota_dfu();
+	LOG_INF("joystick UI: entering BLE DFU bootloader");
+	/* Blank the OLED before the reset. Without this the panel retains its
+	 * last frame (the menu) across the reboot — so if the bootloader's
+	 * BLE-OTA path stalls, it looks like the app froze on the menu rather
+	 * than a clean handoff. Mirrors the button UI's action_enter_dfu, which
+	 * does mc_display_off() before mesh_reboot_to_ota_dfu(). */
+	_display.turnOff();
+	mesh_reboot_to_ota_dfu();  /* GPREGRET 0xA8 + reset; never returns */
 }
 
 /* ===== Display brightness ===== */

@@ -30,7 +30,7 @@ LOG_MODULE_REGISTER(zephcore_ble, CONFIG_ZEPHCORE_BLE_LOG_LEVEL);
 
 #define DEVICE_NAME_MAX 29
 #define FRAME_QUEUE_SIZE CONFIG_ZEPHCORE_BLE_QUEUE_SIZE
-#define BLE_TX_POWER 4
+#define BLE_TX_POWER 8
 #define BLE_TX_RETRY_MS 20
 
 /* BLE connection parameters */
@@ -247,11 +247,38 @@ BT_GATT_SERVICE_DEFINE(secure_nus_svc,
  * target and the tool re-scans for it (the legacy buttonless flow). Adafruit's
  * 0xB1 bonded-resume path needs SoftDevice peer-data enrollment we can't
  * replicate on Zephyr, so the phone makes a fresh connection to the bootloader.
+ *
+ * The service exposes the FULL legacy DFU shape Adafruit ships (not just the
+ * control point): iOS's LegacyDFUService treats the DFU Packet (1532) char as
+ * a *required* characteristic — discovery fails (DFU "instantly fails") without
+ * it — and reads the DFU Revision (1534 = 0x0001 "app mode") to classify the
+ * device as an application that supports the buttonless jump (missing → the app
+ * can't identify the device → shows it nameless). Packet is a no-op here: the
+ * real image upload happens in the bootloader, not the running app. All three
+ * chars sit behind AUTHEN, matching the Arduino companion's service-wide MITM
+ * floor (`bledfu.setPermission(SECMODE_ENC_WITH_MITM, ...)`); a bonded phone's
+ * DFU app reuses the OS-level bond, an unpaired stranger is rejected.
+ *
+ * NOTE on the service symbol name: Zephyr registers static GATT services in
+ * the order ld's SORT_BY_NAME emits them — i.e. alphabetically by the symbol
+ * passed to BT_GATT_SERVICE_DEFINE. This service MUST sort *after*
+ * `secure_nus_svc` so the NUS attribute handles stay fixed; otherwise every
+ * NUS handle shifts and bonded phones with cached handles get ATT 0x03
+ * (Write Not Permitted) on the NUS RX write. Hence the `secure_nus_svc_dfu`
+ * name (a string sorts before its own extensions, so NUS keeps the low range).
  */
 static struct bt_uuid_128 dfu_svc_uuid = BT_UUID_INIT_128(
 	BT_UUID_128_ENCODE(0x00001530, 0x1212, 0xefde, 0x1523, 0x785feabcd123));
 static struct bt_uuid_128 dfu_ctrl_uuid = BT_UUID_INIT_128(
 	BT_UUID_128_ENCODE(0x00001531, 0x1212, 0xefde, 0x1523, 0x785feabcd123));
+static struct bt_uuid_128 dfu_packet_uuid = BT_UUID_INIT_128(
+	BT_UUID_128_ENCODE(0x00001532, 0x1212, 0xefde, 0x1523, 0x785feabcd123));
+static struct bt_uuid_128 dfu_revision_uuid = BT_UUID_INIT_128(
+	BT_UUID_128_ENCODE(0x00001534, 0x1212, 0xefde, 0x1523, 0x785feabcd123));
+
+/* DFU Revision = 0x0001 (DFU_REV_APPMODE), little-endian — tells the DFU app
+ * "this is an application that supports the buttonless jump to bootloader". */
+static const uint8_t dfu_revision[2] = { 0x01, 0x00 };
 
 static void dfu_jump_work_fn(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(dfu_jump_work, dfu_jump_work_fn);
@@ -287,7 +314,27 @@ static void dfu_ctrl_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value
 	ARG_UNUSED(value);
 }
 
-BT_GATT_SERVICE_DEFINE(dfu_svc,
+/* DFU Packet — present only so the DFU library's characteristic discovery
+ * succeeds; the actual image transfer happens in the bootloader, not here. */
+static ssize_t dfu_packet_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+				const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(attr);
+	ARG_UNUSED(buf);
+	ARG_UNUSED(offset);
+	ARG_UNUSED(flags);
+	return len;  /* no-op in app mode */
+}
+
+static ssize_t dfu_revision_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+				 void *buf, uint16_t len, uint16_t offset)
+{
+	return bt_gatt_attr_read(conn, attr, buf, len, offset,
+				 dfu_revision, sizeof(dfu_revision));
+}
+
+BT_GATT_SERVICE_DEFINE(secure_nus_svc_dfu,
 	BT_GATT_PRIMARY_SERVICE(&dfu_svc_uuid),
 	BT_GATT_CHARACTERISTIC(&dfu_ctrl_uuid.uuid,
 		BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
@@ -295,6 +342,14 @@ BT_GATT_SERVICE_DEFINE(dfu_svc,
 		NULL, dfu_ctrl_write, NULL),
 	BT_GATT_CCC(dfu_ctrl_ccc_changed,
 		BT_GATT_PERM_READ_AUTHEN | BT_GATT_PERM_WRITE_AUTHEN),
+	BT_GATT_CHARACTERISTIC(&dfu_packet_uuid.uuid,
+		BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+		BT_GATT_PERM_WRITE_AUTHEN,
+		NULL, dfu_packet_write, NULL),
+	BT_GATT_CHARACTERISTIC(&dfu_revision_uuid.uuid,
+		BT_GATT_CHRC_READ,
+		BT_GATT_PERM_READ_AUTHEN,
+		dfu_revision_read, NULL, NULL),
 );
 #endif /* CONFIG_ZEPHCORE_BLE_DFU */
 
@@ -347,14 +402,26 @@ static void build_device_name_and_adv(const char *name_from_prefs)
 		/* Prepend "MeshCore-" prefix so apps that filter on it can find us */
 		snprintf(device_name, sizeof(device_name), "MeshCore-%s", name_from_prefs);
 
-		/* Apple BLE Accessory Design Guidelines: device name must not
-		 * contain ':' or ';' characters. Replace with '-'.
+		/* Sanitize the BLE-advertised name to printable ASCII, compacting
+		 * in place (write index w never outpaces read index r):
+		 *   - ':' / ';'        -> '-'  (Apple Accessory Design Guidelines)
+		 *   - non-ASCII bytes  -> dropped (e.g. emoji in the node name).
+		 *     iOS's BLE scanner blanks the WHOLE advertised name if it
+		 *     contains any non-ASCII byte, showing the device nameless.
+		 * This only sanitizes the BLE/GAP copy; the mesh node name (emoji
+		 * and all) is untouched and still shown by the companion app.
 		 */
-		for (size_t i = 0; device_name[i]; i++) {
-			if (device_name[i] == ':' || device_name[i] == ';') {
-				device_name[i] = '-';
+		size_t w = 0;
+		for (size_t r = 0; device_name[r]; r++) {
+			unsigned char c = (unsigned char)device_name[r];
+			if (c == ':' || c == ';') {
+				device_name[w++] = '-';
+			} else if (c >= 0x20 && c < 0x7F) {
+				device_name[w++] = (char)c;
 			}
+			/* else: drop control / non-ASCII (multi-byte UTF-8) bytes */
 		}
+		device_name[w] = '\0';
 	} else {
 		/* Fallback - should never happen since prefs.node_name has default */
 		snprintf(device_name, sizeof(device_name), "MeshCore");
