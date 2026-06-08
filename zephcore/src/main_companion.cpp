@@ -89,15 +89,26 @@ extern "C" void bt_ctlr_assert_handle(char *file, uint32_t line)
 #define MESH_EVENT_GPS_ACTION    BIT(5)  /* GPS state change (must run on main thread!) */
 #define MESH_EVENT_TX_DRAIN      BIT(6)  /* Outbound packet delay expired, run checkSend */
 #define MESH_EVENT_PREFS_DIRTY   BIT(8)  /* Prefs mutated off-main; main flushes to flash */
+#define MESH_EVENT_RTC_SAVE      BIT(9)  /* Hardware-RTC write requested off-main */
 
 #ifdef ZEPHCORE_LORA
 /* Forward decl — data_store + companion_mesh_ptr statics are defined further
  * down in the file, so mesh_event_loop() can't reference them directly. */
 static void save_prefs_to_flash(void);
 #endif
+
+/* Pending epoch for a deferred zephcore_rtc_save(). gps_fix_callback runs on
+ * the GNSS modem_chat worker thread, where the RTC's blocking I2C transactions
+ * (burst read/write, several ms each) would stall NMEA ingest — same hazard
+ * documented for prefs flash writes below. We stash the latest epoch and let
+ * the main thread perform the actual I2C write via MESH_EVENT_RTC_SAVE;
+ * concurrent posts coalesce into one save of the latest time. */
+static atomic_t pending_rtc_epoch = ATOMIC_INIT(0);
+
 #define MESH_EVENT_BASE          (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE | \
 	MESH_EVENT_BLE_RX | MESH_EVENT_HOUSEKEEPING | MESH_EVENT_UI_ACTION |  \
-	MESH_EVENT_GPS_ACTION | MESH_EVENT_TX_DRAIN | MESH_EVENT_PREFS_DIRTY)
+	MESH_EVENT_GPS_ACTION | MESH_EVENT_TX_DRAIN | MESH_EVENT_PREFS_DIRTY | \
+	MESH_EVENT_RTC_SAVE)
 #if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
 #define MESH_EVENT_JOYSTICK_LOOP BIT(7)  /* Joystick UI loop tick (50 ms) */
 #define MESH_EVENT_ALL           (MESH_EVENT_BASE | MESH_EVENT_JOYSTICK_LOOP)
@@ -110,6 +121,16 @@ static void save_prefs_to_flash(void);
 
 /* Event-driven mesh loop - k_event for signaling from ISR/callbacks */
 static struct k_event mesh_events;
+
+/* Defer a hardware-RTC write to the main thread (see pending_rtc_epoch above
+ * for why gps_fix_callback can't do this inline). Coalesces like prefs-dirty:
+ * only the latest epoch survives if multiple fixes land before the main loop
+ * services the event. */
+static void request_rtc_save(uint32_t epoch)
+{
+	atomic_set(&pending_rtc_epoch, (atomic_val_t)epoch);
+	k_event_post(&mesh_events, MESH_EVENT_RTC_SAVE);
+}
 
 /* Work items for event-driven processing */
 static void rx_process_work_fn(struct k_work *work);
@@ -480,6 +501,13 @@ static void mesh_event_loop(void)
 		}
 #endif
 
+		/* Off-main RTC write request (gps_fix_callback runs in modem_chat
+		 * context — see request_rtc_save()). Perform the blocking I2C
+		 * write here on the main thread instead. */
+		if (events & MESH_EVENT_RTC_SAVE) {
+			zephcore_rtc_save((uint32_t)atomic_get(&pending_rtc_epoch));
+		}
+
 #if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
 		if (events & MESH_EVENT_JOYSTICK_LOOP) {
 			joystick_ui_task.loop();
@@ -755,7 +783,10 @@ static void gps_fix_callback(double lat, double lon, int64_t utc_time)
 		LOG_INF("GPS fix: RTC sync time=%lld", utc_time);
 		rtc_clock.setCurrentTime((uint32_t)utc_time);
 		time_sync_report(TIME_SYNC_GPS);
-		zephcore_rtc_save((uint32_t)utc_time);  /* persist to hardware RTC */
+		/* Defer the hardware-RTC write to the main thread — see
+		 * request_rtc_save()/pending_rtc_epoch: blocking I2C here would
+		 * stall NMEA ingest, same hazard as the prefs flash write below. */
+		request_rtc_save((uint32_t)utc_time);
 	}
 
 #ifdef ZEPHCORE_LORA

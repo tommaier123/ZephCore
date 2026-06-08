@@ -89,13 +89,26 @@ static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
 #define MESH_EVENT_GPS_ACTION    BIT(4)  /* GPS state change (must run on main thread!) */
 #define MESH_EVENT_TX_DRAIN      BIT(5)  /* Outbound packet delay expired, run checkSend */
 #define MESH_EVENT_PUSH_TICK     BIT(6)  /* Room server: drive the post-sync push engine */
-#define MESH_EVENT_ALL           (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE | MESH_EVENT_CLI_RX | MESH_EVENT_HOUSEKEEPING | MESH_EVENT_GPS_ACTION | MESH_EVENT_TX_DRAIN | MESH_EVENT_PUSH_TICK)
+#define MESH_EVENT_RTC_SAVE      BIT(7)  /* Hardware-RTC write requested off-main */
+#define MESH_EVENT_ALL           (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE | MESH_EVENT_CLI_RX | MESH_EVENT_HOUSEKEEPING | MESH_EVENT_GPS_ACTION | MESH_EVENT_TX_DRAIN | MESH_EVENT_PUSH_TICK | MESH_EVENT_RTC_SAVE)
 
 /* Housekeeping interval - infrequent to preserve power savings */
 #define HOUSEKEEPING_INTERVAL_MS CONFIG_ZEPHCORE_HOUSEKEEPING_INTERVAL_MS
 
 /* Event object for mesh loop */
 static struct k_event mesh_events;
+
+/* Pending epoch for a deferred zephcore_rtc_save() — gps_fix_callback runs on
+ * the GNSS modem_chat worker thread, where the RTC's blocking I2C transactions
+ * would stall NMEA ingest. Stash the latest epoch and let the main thread
+ * perform the write; concurrent posts coalesce into one save. */
+static atomic_t pending_rtc_epoch = ATOMIC_INIT(0);
+
+static void request_rtc_save(uint32_t epoch)
+{
+	atomic_set(&pending_rtc_epoch, (atomic_val_t)epoch);
+	k_event_post(&mesh_events, MESH_EVENT_RTC_SAVE);
+}
 
 /* USB CDC state */
 static const struct device *usb_dev;
@@ -285,7 +298,10 @@ static void gps_fix_callback(double lat, double lon, int64_t utc_time)
 	if (utc_time > 0) {
 		LOG_INF("GPS fix: RTC sync time=%lld", utc_time);
 		rtc_clock.setCurrentTime((uint32_t)utc_time);
-		zephcore_rtc_save((uint32_t)utc_time);  /* persist to hardware RTC */
+		/* Defer the hardware-RTC write to the main thread — blocking I2C
+		 * here would stall NMEA ingest (gps_fix_callback runs in the
+		 * GNSS modem_chat worker context). */
+		request_rtc_save((uint32_t)utc_time);
 	}
 
 	int lat_deg = (int)lat;
@@ -402,6 +418,13 @@ static void room_event_loop(void)
 			/* Battery is now refreshed lazily from ui_pages_render() with
 			 * a 30 s freshness guard — no periodic ADC fire here. */
 #endif
+		}
+
+		/* Off-main RTC write request (gps_fix_callback runs in modem_chat
+		 * context — see request_rtc_save()). Perform the blocking I2C
+		 * write here on the main thread instead. */
+		if (events & MESH_EVENT_RTC_SAVE) {
+			zephcore_rtc_save((uint32_t)atomic_get(&pending_rtc_epoch));
 		}
 	}
 }
