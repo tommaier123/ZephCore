@@ -118,6 +118,14 @@ static char cli_line_buf[CLI_LINE_BUF_SIZE];
 static char cli_reply_buf[256];
 static uint16_t cli_line_idx;
 
+/* Completed CLI lines are handed to the MAIN thread for execution.  Byte
+ * assembly + echo (cli_rx_work_fn) runs on sysworkq and touches no mesh
+ * state, but handleCommand() mutates the lock-free packet pool / dispatcher
+ * that loop() also touches — running it on sysworkq races the main loop.
+ * So we queue the finished line and let the event loop run handleCommand(). */
+struct cli_cmd_line { char buf[CLI_LINE_BUF_SIZE]; };
+K_MSGQ_DEFINE(cli_cmd_queue, sizeof(struct cli_cmd_line), 4, 4);
+
 /* Work items for event-driven processing */
 static void cli_rx_work_fn(struct k_work *work);
 static void housekeeping_timer_fn(struct k_timer *timer);
@@ -191,22 +199,22 @@ static void cli_rx_work_fn(struct k_work *work)
 				LOG_INF("CLI cmd len=%d: %.40s%s", cli_line_idx,
 					cli_line_buf, cli_line_idx > 40 ? "..." : "");
 
-				/* Process CLI command */
-#ifdef ZEPHCORE_LORA
-				if (room_mesh_ptr) {
-					cli_reply_buf[0] = '\0';
-					room_mesh_ptr->handleCommand(0, cli_line_buf, cli_reply_buf);
-					if (cli_reply_buf[0] != '\0') {
-						/* Arduino format: newline, then "  -> reply" */
-						cli_print("\r\n  -> ");
-						cli_print(cli_reply_buf);
-					}
+				/* Hand the command to the main thread (see cli_cmd_queue).
+				 * The reply + trailing newline are emitted there, exactly
+				 * matching the previous inline output order. */
+				struct cli_cmd_line c;
+				strncpy(c.buf, cli_line_buf, sizeof(c.buf) - 1);
+				c.buf[sizeof(c.buf) - 1] = '\0';
+				if (k_msgq_put(&cli_cmd_queue, &c, K_NO_WAIT) == 0) {
+					k_event_post(&mesh_events, MESH_EVENT_CLI_RX);
+				} else {
+					cli_print("\r\n  -> busy\r\n");
 				}
-#endif
 				cli_line_idx = 0;
+			} else {
+				/* Empty line — just emit the newline (no command to run) */
+				cli_print("\r\n");
 			}
-			/* New line for next command */
-			cli_print("\r\n");
 		} else if (byte == 0x7F || byte == 0x08) {
 			/* Backspace - echo backspace sequence */
 			if (cli_line_idx > 0) {
@@ -226,6 +234,25 @@ static void cli_rx_work_fn(struct k_work *work)
 		}
 	}
 }
+
+#ifdef ZEPHCORE_LORA
+/* Run queued CLI commands on the MAIN thread (see cli_cmd_queue).  Output
+ * order matches the old inline path exactly: "\r\n  -> reply" when there is
+ * a reply, then a trailing "\r\n". */
+static void process_cli_commands(void)
+{
+	struct cli_cmd_line c;
+	while (room_mesh_ptr && k_msgq_get(&cli_cmd_queue, &c, K_NO_WAIT) == 0) {
+		cli_reply_buf[0] = '\0';
+		room_mesh_ptr->handleCommand(0, c.buf, cli_reply_buf);
+		if (cli_reply_buf[0] != '\0') {
+			cli_print("\r\n  -> ");
+			cli_print(cli_reply_buf);
+		}
+		cli_print("\r\n");
+	}
+}
+#endif
 
 /* Housekeeping timer callback - signals event to wake mesh loop periodically */
 static void housekeeping_timer_fn(struct k_timer *timer)
@@ -375,6 +402,13 @@ static void room_event_loop(void)
 		}
 
 #ifdef ZEPHCORE_LORA
+		/* Run queued CLI commands here (main thread) BEFORE loop() drains
+		 * any outbound packets they enqueued — keeps all mesh-state
+		 * mutation on the main thread (see cli_cmd_queue). */
+		if (events & MESH_EVENT_CLI_RX) {
+			process_cli_commands();
+		}
+
 		/* Packet processing — only on radio/CLI/TX events */
 		if (room_mesh_ptr &&
 		    (events & (MESH_EVENT_LORA_RX | MESH_EVENT_LORA_TX_DONE |

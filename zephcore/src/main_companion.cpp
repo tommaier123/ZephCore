@@ -133,9 +133,12 @@ static void request_rtc_save(uint32_t epoch)
 }
 
 /* Work items for event-driven processing */
-static void rx_process_work_fn(struct k_work *work);
+static void process_companion_rx(void);   /* runs on MAIN thread (see ble_on_rx_frame) */
 static void contact_iter_work_fn(struct k_work *work);
 static void housekeeping_timer_fn(struct k_timer *timer);
+#if ZEPHCORE_USB_STACK
+static void companion_cli_run(const char *line);  /* main-thread text-CLI exec */
+#endif
 
 #if IS_ENABLED(CONFIG_ZEPHCORE_UI_DESIGN_JOYSTICK)
 static JoystickUITask joystick_ui_task;
@@ -151,8 +154,17 @@ static void joystick_signal_tx(void)
 }
 #endif
 
-K_WORK_DEFINE(rx_process_work, rx_process_work_fn);
 K_WORK_DEFINE(contact_iter_work, contact_iter_work_fn);
+
+#if ZEPHCORE_USB_STACK
+/* Completed USB text-CLI lines are run on the MAIN thread (the USB adapter
+ * assembles them on sysworkq).  CommonCLI::handleCommand mutates mesh state
+ * shared with loop(), so it can't run on sysworkq — same hazard as the
+ * binary protocol path.  Drained on MESH_EVENT_BLE_RX. */
+#define CLI_LINE_BUF_SIZE 256
+struct companion_cli_line { char buf[CLI_LINE_BUF_SIZE]; };
+K_MSGQ_DEFINE(companion_cli_queue, sizeof(struct companion_cli_line), 4, 4);
+#endif
 
 #if ZEPHCORE_USB_STACK
 /* USB TX-drained callback (mirrors BLE on_tx_idle): the TX ring emptied, so
@@ -197,13 +209,12 @@ static void ble_on_rx_frame(const uint8_t *data, uint16_t len)
 		return;
 	}
 
-	/* Hand the frame to sysworkq for V3-protocol parsing.  Main thread
-	 * doesn't need a direct wake here: if handleProtocolFrame ends up
-	 * enqueueing an outbound LoRa packet, notifyTxQueued() schedules
-	 * tx_drain_work which posts MESH_EVENT_TX_DRAIN — that's the only
-	 * signal main needs to drive the dispatcher.  BLE-only commands
-	 * (login, time, app-start, …) are handled entirely on sysworkq. */
-	k_work_submit(&rx_process_work);
+	/* Wake the MAIN thread to parse the frame.  handleProtocolFrame()
+	 * mutates the lock-free packet pool / dispatcher that loop() also
+	 * touches, so it MUST run on the main thread — parsing on sysworkq
+	 * races the main loop (the source of the stuck-"Sending…" bug when an
+	 * inbound reply is processed while a send command is parsed). */
+	k_event_post(&mesh_events, MESH_EVENT_BLE_RX);
 }
 
 /* BLE TX idle callback — called when TX queue is empty.
@@ -340,10 +351,12 @@ static void push_callback(uint8_t code, const uint8_t *data, size_t len)
 }
 
 /* RX processing work - handles received BLE/USB frames */
-static void rx_process_work_fn(struct k_work *work)
+/* Parse inbound BLE/USB binary frames on the MAIN thread.  Called from the
+ * event loop on MESH_EVENT_BLE_RX (formerly a sysworkq work item — moved to
+ * the main thread so handleProtocolFrame's mesh-state mutation can't race
+ * loop()). */
+static void process_companion_rx(void)
 {
-	ARG_UNUSED(work);
-
 	struct {
 		uint16_t len;
 		uint8_t buf[MAX_FRAME_SIZE];
@@ -456,6 +469,19 @@ static void mesh_event_loop(void)
 		 * queue would deadlock. */
 		if (events & MESH_EVENT_GPS_ACTION) {
 			gps_process_event();
+		}
+
+		/* Parse inbound BLE/USB frames + USB text-CLI lines HERE (main
+		 * thread) before loop() drains any outbound they enqueued — keeps
+		 * all mesh-state mutation on one thread (see ble_on_rx_frame). */
+		if (events & MESH_EVENT_BLE_RX) {
+			process_companion_rx();
+#if ZEPHCORE_USB_STACK
+			struct companion_cli_line c;
+			while (k_msgq_get(&companion_cli_queue, &c, K_NO_WAIT) == 0) {
+				companion_cli_run(c.buf);
+			}
+#endif
 		}
 
 		/* Packet processing — only on radio/BLE/TX events */
@@ -733,7 +759,10 @@ static bool handle_autoshutdown_cli(const char *line, char *reply)
 }
 #endif
 
-static void companion_cli_dispatch(const char *line)
+/* Executes a text-CLI line — runs on the MAIN thread (drained from
+ * companion_cli_queue in the event loop).  CommonCLI::handleCommand touches
+ * mesh state shared with loop(), so it must not run on sysworkq. */
+static void companion_cli_run(const char *line)
 {
 	char reply[CLI_REPLY_SIZE];
 	reply[0] = '\0';
@@ -752,6 +781,20 @@ static void companion_cli_dispatch(const char *line)
 		zephcore_usb_companion_write_text(reply, strlen(reply));
 	}
 	zephcore_usb_companion_write_text("\r\n", 2);
+}
+
+/* USB-adapter callback (runs on sysworkq).  Just queue the line and wake the
+ * main thread — the actual handleCommand happens in companion_cli_run(). */
+static void companion_cli_dispatch(const char *line)
+{
+	struct companion_cli_line c;
+	strncpy(c.buf, line, sizeof(c.buf) - 1);
+	c.buf[sizeof(c.buf) - 1] = '\0';
+	if (k_msgq_put(&companion_cli_queue, &c, K_NO_WAIT) == 0) {
+		k_event_post(&mesh_events, MESH_EVENT_BLE_RX);
+	} else {
+		zephcore_usb_companion_write_text("\r\n  -> busy\r\n", 13);
+	}
 }
 
 #endif  /* ZEPHCORE_USB_STACK */
@@ -1093,7 +1136,7 @@ int main(void)
 	 * via CONFIG_ZEPHCORE_COMPANION_USB (e.g. prod builds on USB-capable boards).
 	 */
 #if ZEPHCORE_USB_STACK
-	zephcore_usb_companion_init(&mesh_events, &rx_process_work, MESH_EVENT_BLE_RX,
+	zephcore_usb_companion_init(&mesh_events, MESH_EVENT_BLE_RX,
 				   &zephyr_board);
 	/* Mirror BLE connect/disconnect UI + cleanup for USB sessions. */
 	zephcore_usb_companion_set_session_start_cb(usb_on_session_start);
@@ -1123,15 +1166,13 @@ int main(void)
 	 *   - MESH_EVENT_LORA_RX: LoRa packet received (from RX async callback)
 	 *   - MESH_EVENT_LORA_TX_DONE: LoRa TX complete (from TX poll work -> callback)
 	 *   - MESH_EVENT_HOUSEKEEPING: Periodic maintenance (noise floor, etc.)
-	 *   - MESH_EVENT_TX_DRAIN: outbound LoRa packet queued (covers BLE/USB-driven
-	 *     mesh.send paths — sysworkq parses incoming frames and posts this
-	 *     when it actually enqueues something)
+	 *   - MESH_EVENT_BLE_RX: BLE/USB frame (or USB text-CLI line) ready to parse.
+	 *     The BLE callback / USB adapter only assemble + queue the frame off-main;
+	 *     process_companion_rx() (and companion_cli_run()) parse it HERE on the
+	 *     main thread so mesh-state mutation never races loop().
+	 *   - MESH_EVENT_TX_DRAIN: outbound LoRa packet queued — wakes loop() to drain
 	 *   - MESH_EVENT_UI_ACTION / GPS_ACTION / PREFS_DIRTY: deferred work
 	 *     from non-main threads
-	 *
-	 * BLE/USB RX frames are parsed entirely on sysworkq (rx_process_work) —
-	 * no direct main-thread wake is needed; if the parsed command produces
-	 * outbound LoRa traffic, notifyTxQueued() routes it via TX_DRAIN.
 	 *
 	 * Other processing still uses work queues:
 	 *   - BLE TX: write_frame -> tx_drain_work (event-driven via notify callback)

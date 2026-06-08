@@ -21,12 +21,11 @@ extern "C" {
  * Call after device_is_ready() for the CDC ACM device.
  *
  * @param mesh_events  Pointer to the k_event used by the mesh event loop
- * @param rx_work      Pointer to the rx_process work item (for BLE RX event)
- * @param mesh_event_ble_rx  Bitmask for MESH_EVENT_BLE_RX
+ * @param mesh_event_ble_rx  Bitmask for MESH_EVENT_BLE_RX (posted to wake the
+ *                           main thread when a complete frame is assembled)
  * @param board        Opaque pointer to ZephyrBoard (for DFU reboot)
  */
 void zephcore_usb_companion_init(struct k_event *mesh_events,
-				 struct k_work *rx_work,
 				 uint32_t mesh_event_ble_rx,
 				 void *board);
 

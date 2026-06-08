@@ -67,8 +67,12 @@ static uint8_t usb_tx_ring_buf_data[USB_TX_RING_BUF_SIZE];
 static struct ring_buf usb_tx_ring_buf;
 static struct k_spinlock usb_tx_lock;
 
-/* Work item for deferred V3 frame processing (set by init) */
-static struct k_work *s_rx_work;
+/* Main-thread wake for assembled binary frames (set by init).  The byte
+ * assembly below runs on sysworkq, but V3-protocol parsing must happen on the
+ * main thread (handleProtocolFrame mutates mesh state shared with loop()), so
+ * we post this event instead of running the parser here. */
+static struct k_event *s_mesh_events;
+static uint32_t s_mesh_event_ble_rx;
 
 /* Session start/end callbacks (mirror BLE on_connected / on_disconnected),
  * set by main. start fires on first-frame claim, end on DTR drop. */
@@ -311,10 +315,10 @@ static void usb_rx_work_fn(struct k_work *work)
 					} f;
 					f.len = payload_len;
 					memcpy(f.buf, payload, payload_len);
-					/* sysworkq handles V3-protocol parsing; main only wakes
-					 * if downstream LoRa work gets enqueued (via TX_DRAIN). */
+					/* Queue the frame and wake the main thread to parse it
+					 * (parsing on sysworkq would race loop()). */
 					if (k_msgq_put(zephcore_ble_get_recv_queue(), &f, K_NO_WAIT) == 0) {
-						k_work_submit(s_rx_work);
+						k_event_post(s_mesh_events, s_mesh_event_ble_rx);
 					}
 				}
 
@@ -479,15 +483,13 @@ void zephcore_usb_companion_write_text(const char *text, size_t len)
 }
 
 void zephcore_usb_companion_init(struct k_event *mesh_events,
-				 struct k_work *rx_work,
 				 uint32_t mesh_event_ble_rx,
 				 void *board)
 {
 	ARG_UNUSED(board);
-	ARG_UNUSED(mesh_events);
-	ARG_UNUSED(mesh_event_ble_rx);
 
-	s_rx_work = rx_work;
+	s_mesh_events = mesh_events;
+	s_mesh_event_ble_rx = mesh_event_ble_rx;
 
 	/* The cdc_acm_uart DT node may be present without the class driver compiled
 	 * (shared esp32s3_usb_otg.dtsi exposes the node unconditionally; the class is
