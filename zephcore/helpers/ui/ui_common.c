@@ -350,9 +350,15 @@ void ui_prepare_for_system_off(void)
  * well before it collapses. */
 #define UI_AUTO_SHUTDOWN_CHECK_MS  30000
 
+/* Consecutive below-threshold readings required before shutdown.
+ * 3 hits × 30 s = 90 s confirm window — a single TX-induced sag that
+ * lands on a check window won't trigger a false shutdown. */
+#define UI_AUTO_SHUTDOWN_CONFIRM_COUNT  3
+
 /* Runtime threshold (mV); 0 disables. Seeded from the Kconfig default, then
  * overridden at boot from prefs and live via the CLI (ui_set_auto_shutdown_mv). */
 static uint16_t s_auto_shutdown_mv = CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS;
+static uint8_t  s_low_count;
 
 void ui_set_auto_shutdown_mv(uint16_t mv)
 {
@@ -407,6 +413,7 @@ void ui_auto_shutdown_check(void)
 
 	uint16_t mv = s_batt_provider();
 	if (mv == 0 || mv >= s_auto_shutdown_mv) {
+		s_low_count = 0;
 		return;  /* no battery hardware / reading, or healthy */
 	}
 
@@ -414,11 +421,18 @@ void ui_auto_shutdown_check(void)
 	 * cell, not the supply, and yanking power on a bench cable is annoying. */
 	if (s_power_source_provider && s_power_source_provider()) {
 		LOG_INF("auto-shutdown: %u mV below threshold but externally powered", mv);
+		s_low_count = 0;
 		return;
 	}
 
-	LOG_WRN("auto-shutdown: battery %u mV < %u mV — powering off",
-		mv, s_auto_shutdown_mv);
+	s_low_count++;
+	LOG_WRN("auto-shutdown: battery %u mV < %u mV (%u/%u)",
+		mv, s_auto_shutdown_mv, s_low_count, UI_AUTO_SHUTDOWN_CONFIRM_COUNT);
+	if (s_low_count < UI_AUTO_SHUTDOWN_CONFIRM_COUNT) {
+		return;
+	}
+
+	LOG_WRN("auto-shutdown: confirmed — powering off");
 
 #ifdef CONFIG_ZEPHCORE_UI_DISPLAY
 	auto_shutdown_warn_screen();
