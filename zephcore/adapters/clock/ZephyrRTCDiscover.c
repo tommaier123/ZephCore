@@ -124,27 +124,34 @@ static bool rtc_probe(uint32_t *epoch_out)
 			continue;  /* no ACK => chip absent */
 		}
 
-		/* Mask off flag/century bits, then require the block to be valid
-		 * BCD. This is what proves a real RTC lives here (vs. an unrelated
-		 * chip sharing the address) — only then is it safe to adopt and
-		 * later WRITE to. A factory-fresh RTC reads a clean 2000-01-01,
-		 * which is valid BCD (just stale), so it's still adopted. */
+		/* Mask off flag/century bits. We trust this is a real RTC (vs. an
+		 * unrelated chip sharing the address) if EITHER the block is valid
+		 * BCD, OR the chip's power-loss flag is set — the latter is itself
+		 * proof it's an RTC that lost power and whose time registers may be
+		 * garbage. Adopting in the power-loss case is essential: otherwise a
+		 * battery-depleted RTC (garbage registers, VL/OSF/PORF latched) would
+		 * never become the write-back target, so a sync could never
+		 * re-initialise it and the clock would stay blank forever. */
 		uint8_t sb = blk[0] & 0x7F, mb = blk[1] & 0x7F, hb = blk[2] & 0x3F;
 		uint8_t db = blk[d->date_index] & 0x3F, ob = blk[5] & 0x1F, yb = blk[6];
 
-		if (!bcd_field_ok(sb, 59) || !bcd_field_ok(mb, 59) ||
-		    !bcd_field_ok(hb, 23) || !bcd_field_ok(db, 31) ||
-		    !bcd_field_ok(ob, 12) || !bcd_field_ok(yb, 99) ||
-		    BCD2BIN(db) < 1 || BCD2BIN(ob) < 1) {
-			continue;  /* not a real RTC at this address — do not adopt */
+		bool bcd_ok = bcd_field_ok(sb, 59) && bcd_field_ok(mb, 59) &&
+			      bcd_field_ok(hb, 23) && bcd_field_ok(db, 31) &&
+			      bcd_field_ok(ob, 12) && bcd_field_ok(yb, 99) &&
+			      BCD2BIN(db) >= 1 && BCD2BIN(ob) >= 1;
+		bool unreliable = rtc_time_unreliable(d, blk);
+
+		if (!bcd_ok && !unreliable) {
+			continue;  /* neither valid time nor a lost-power RTC => skip */
 		}
 
 		if (s_active == NULL) {
-			s_active = d;  /* confirmed RTC => our write-back target */
+			s_active = d;  /* RTC => our write-back target */
 		}
 
-		if (rtc_time_unreliable(d, blk)) {
-			LOG_WRN("%s present but time flagged unreliable", d->name);
+		if (unreliable) {
+			LOG_WRN("%s present, power-loss flag set — clock will be set "
+				"on the next GPS/app/CLI sync", d->name);
 			continue;
 		}
 

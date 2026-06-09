@@ -25,6 +25,7 @@
 
 #include "ui_task.h"
 #include "ui_pages.h"
+#include <time_sync.h>
 
 #ifdef CONFIG_ZEPHCORE_UI_BUZZER
 #include "buzzer.h"
@@ -909,8 +910,28 @@ void ui_set_battery(uint16_t mv, uint8_t pct)
 void ui_set_clock(uint32_t epoch)
 {
 	struct ui_state *s = get_state();
+	static enum time_sync_source last_src = TIME_SYNC_NONE;
+
+	/* 1735689600 = 2025-01-01: the same "time is set" threshold the top-bar
+	 * renderer uses. The clock only becomes visible once epoch crosses it. */
+	bool was_valid = s->rtc_epoch > 1735689600;
+	bool now_valid = epoch > 1735689600;
 
 	s->rtc_epoch = epoch;
+
+	/* Repaint the EPD (which only redraws on demand) when the visible top-bar
+	 * clock/source-tag changes, so the user never has to change pages to see
+	 * an update. Both transitions are picked up on the next housekeeping tick:
+	 *   - clock first becomes valid  → boot RTC restore / first sync
+	 *   - source tag changes         → L→A (app), →G (GPS fix), A→L (12h expiry)
+	 * Steady state triggers nothing (epoch valid + source unchanged). */
+	enum time_sync_source src = time_sync_get_source();
+	bool source_changed = (src != last_src);
+	last_src = src;
+
+	if (now_valid && (!was_valid || source_changed)) {
+		schedule_render();
+	}
 }
 
 void ui_add_recent(const char *name, int16_t rssi, uint32_t age_s)

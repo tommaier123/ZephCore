@@ -9,6 +9,7 @@
  */
 
 #include <time_sync.h>
+#include <adapters/gps/ZephyrGPSManager.h>
 #include <zephyr/kernel.h>
 
 static enum time_sync_source s_last = TIME_SYNC_NONE;
@@ -22,6 +23,16 @@ void time_sync_report(enum time_sync_source src)
 
 enum time_sync_source time_sync_get_source(void)
 {
+	/* Live GPS hold is authoritative and uses the SAME signal that blocks
+	 * phone time-sync (gps_has_time_sync(), expires 2h after the last fix),
+	 * so the tag can never disagree with that policy: while GPS holds the
+	 * clock the tag is G regardless of the freshness window below. After a
+	 * reboot the flag is reset, so this returns false and we fall through to
+	 * the local/freshness logic (→ L until something re-syncs). */
+	if (gps_has_time_sync()) {
+		return TIME_SYNC_GPS;
+	}
+
 	/* Local/manual (CLI) and "never synced" are both just local time. */
 	if (s_last == TIME_SYNC_NONE || s_last == TIME_SYNC_CLI) {
 		return TIME_SYNC_CLI;
