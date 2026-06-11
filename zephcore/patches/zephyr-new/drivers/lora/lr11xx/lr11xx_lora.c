@@ -265,7 +265,14 @@ static void lr11xx_apply_modem_config(struct lr11xx_data *data,
 		ctx,
 		LR11XX_SYSTEM_IRQ_RX_DONE | LR11XX_SYSTEM_IRQ_TX_DONE |
 		LR11XX_SYSTEM_IRQ_TIMEOUT | LR11XX_SYSTEM_IRQ_CRC_ERROR |
-		LR11XX_SYSTEM_IRQ_HEADER_ERROR,
+		LR11XX_SYSTEM_IRQ_HEADER_ERROR |
+		/* CAD_DONE/CAD_DETECTED MUST be redirected to DIO1 or the blocking
+		 * LBT CAD (run before every TX, cad.mode=LBT) never completes — its
+		 * semaphore is signaled from the DIO1 handler, so without this the
+		 * CAD times out (~200ms) every TX and LBT is dead. The SDK redirects
+		 * no IRQ to DIO by default; the SX126x driver keeps these in its mask
+		 * too. CAD_DONE only sets during a CAD op, so it's inert during RX. */
+		LR11XX_SYSTEM_IRQ_CAD_DONE | LR11XX_SYSTEM_IRQ_CAD_DETECTED,
 		0);
 }
 
