@@ -62,6 +62,13 @@ AdvertDataParser::AdvertDataParser(const uint8_t app_data[], uint8_t app_data_le
 
 	if (_flags & ADV_NAME_MASK) {
 		int nlen = app_data_len - i;
+		/* Self-defense: callers clamp app_data_len to MAX_ADVERT_DATA_SIZE
+		 * today, but don't trust that — _name is MAX_ADVERT_DATA_SIZE and the
+		 * NUL goes at _name[nlen], so bound nlen to sizeof(_name)-1 or a
+		 * malformed/oversized advert would overflow this stack object. */
+		if (nlen > (int)sizeof(_name) - 1) {
+			nlen = (int)sizeof(_name) - 1;
+		}
 		if (nlen > 0) {
 			memcpy(_name, &app_data[i], nlen);
 			_name[nlen] = 0;
