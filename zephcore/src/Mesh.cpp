@@ -186,7 +186,9 @@ DispatcherAction Mesh::onRecvPacket(Packet *pkt)
 {
 	// Handle direct TRACE packets
 	if (pkt->isRouteDirect() && pkt->getPayloadType() == PAYLOAD_TYPE_TRACE) {
-		if (pkt->path_len < MAX_PATH_SIZE) {
+		/* payload_len must hold the 9-byte header (tag+auth+flags) before we
+		 * read it; otherwise `len = payload_len - i` underflows below. */
+		if (pkt->path_len < MAX_PATH_SIZE && pkt->payload_len >= 9) {
 			int i = 0;
 			uint32_t trace_tag;
 			memcpy(&trace_tag, &pkt->payload[i], 4); i += 4;
@@ -196,7 +198,11 @@ DispatcherAction Mesh::onRecvPacket(Packet *pkt)
 			uint8_t path_sz = flags & 0x03;
 
 			uint8_t len = pkt->payload_len - i;
-			uint8_t offset = pkt->path_len << path_sz;
+			/* path_len * (1<<path_sz) can exceed 255 (path_len up to 63,
+			 * entry size up to 8 bytes); a uint8_t offset would wrap and
+			 * steer the isHashMatch() read past the payload buffer. Keep
+			 * this 16-bit — matches upstream Arduino MeshCore. */
+			uint16_t offset = (uint16_t)pkt->path_len << path_sz;
 			if (offset >= len) {
 				onTraceRecv(pkt, trace_tag, auth_code, flags, pkt->path, &pkt->payload[i], len);
 			} else if (self_id.isHashMatch(&pkt->payload[i + offset], 1 << path_sz) && allowPacketForward(pkt) && !_tables->hasSeen(pkt)) {
