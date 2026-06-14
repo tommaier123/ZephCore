@@ -323,7 +323,13 @@ endif()
 # Enables WiFi AP + HTTP server + MCUboot image management.
 # Requires --sysbuild to build MCUboot alongside the app.
 # Non-ESP32 builds and companion builds are unaffected.
-if(ZEPHCORE_PLATFORM_CONF MATCHES "esp32_common" AND EXTRA_CONF_FILE MATCHES "repeater")
+#
+# Excluded on the classic ESP32 (e.g. T-Beam, board qualifier ".../esp32/..."):
+# its DRAM cannot fit the mesh stack alongside WiFi + MCUboot, so it uses the
+# simple-boot path and a CLI-only repeater (no WiFi OTA). The ESP32-S3/C-series
+# (esp32s3/esp32c*) keep WiFi OTA.
+if(ZEPHCORE_PLATFORM_CONF MATCHES "esp32_common" AND EXTRA_CONF_FILE MATCHES "repeater"
+   AND NOT BOARD MATCHES "/esp32/")
     set(ZEPHCORE_WIFI_OTA_CONF "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/wifi_ota.conf")
     if(EXISTS ${ZEPHCORE_WIFI_OTA_CONF})
         list(APPEND ZEPHCORE_CONF_FILES ${ZEPHCORE_WIFI_OTA_CONF})

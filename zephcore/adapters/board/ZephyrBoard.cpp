@@ -66,6 +66,18 @@ static const struct device *vbat_enable_dev = NULL;
 #define VBAT_ADC_SAMPLES   8
 #endif
 
+/* Battery fuel gauge (AXP2101 PMU etc.) — preferred over the ADC divider when
+ * present. Reports battery voltage and state-of-charge over I2C, so boards with
+ * a PMU and no battery ADC (e.g. LilyGo T-Beam) still get battery telemetry. */
+#if DT_HAS_COMPAT_STATUS_OKAY(x_powers_axp2101_fuel_gauge)
+#include <zephyr/drivers/fuel_gauge.h>
+#define HAS_FUEL_GAUGE 1
+static const struct device *const fuel_gauge_dev =
+	DEVICE_DT_GET(DT_COMPAT_GET_ANY_STATUS_OKAY(x_powers_axp2101_fuel_gauge));
+#else
+#define HAS_FUEL_GAUGE 0
+#endif
+
 /* Initialize TX LED GPIO at boot */
 #if HAS_TX_LED
 static int tx_led_init(void)
@@ -82,7 +94,17 @@ namespace mesh {
 
 uint16_t ZephyrBoard::getBattMilliVolts()
 {
-#if DT_NODE_EXISTS(DT_PATH(zephyr_user)) && \
+#if HAS_FUEL_GAUGE
+	if (device_is_ready(fuel_gauge_dev)) {
+		union fuel_gauge_prop_val val;
+		int ret = fuel_gauge_get_prop(fuel_gauge_dev, FUEL_GAUGE_VOLTAGE, &val);
+		if (ret == 0) {
+			return (uint16_t)(val.voltage / 1000);  /* µV -> mV */
+		}
+		LOG_WRN("Fuel gauge voltage read failed: %d", ret);
+	}
+	return 0;
+#elif DT_NODE_EXISTS(DT_PATH(zephyr_user)) && \
     DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
 	if (!adc_is_ready_dt(&vbat_adc)) {
 		LOG_ERR("ADC not ready");
@@ -149,6 +171,18 @@ uint16_t ZephyrBoard::getBattMilliVolts()
 
 uint8_t ZephyrBoard::getBattPercent()
 {
+#if HAS_FUEL_GAUGE
+	if (device_is_ready(fuel_gauge_dev)) {
+		union fuel_gauge_prop_val val;
+		int ret = fuel_gauge_get_prop(fuel_gauge_dev,
+					      FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE, &val);
+		if (ret == 0) {
+			return val.relative_state_of_charge;
+		}
+		LOG_WRN("Fuel gauge SoC read failed: %d", ret);
+	}
+	/* Fall through to the voltage-curve estimate if the gauge read fails. */
+#endif
 	return battery_curve_lookup(&battery_curve_default, getBattMilliVolts());
 }
 

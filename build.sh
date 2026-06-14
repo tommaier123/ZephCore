@@ -40,6 +40,7 @@ ESP32_boards=(
     heltec_wifi_lora32_v3/esp32s3/procpu
     heltec_wifi_lora32_v4/esp32s3/procpu
     heltec_wifi_lora32_v43/esp32s3/procpu
+    ttgo_tbeam/esp32/procpu
 )
 
 if [[ $1 == "nrf" ]]; then
@@ -127,13 +128,40 @@ if [[ $1 == "esp32" ]]; then
     for board in "${ESP32_boards[@]}"; do
         board_clean_for_path=$(echo "$board" | sed -e 's/\//-/g')
         
-        if [[ $board =~ (esp32[^/]+) ]]; then
+        if [[ $board =~ (esp32[^/]*) ]]; then
             chip="${BASH_REMATCH[1]}"
         else
             echo "Unknown chip for: $board"
             exit 1;
         fi
-        
+
+        # Classic ESP32 (e.g. T-Beam, PICO-D4) cannot fit the mesh stack
+        # alongside MCUboot in DRAM, so it uses Zephyr's simple-boot path: a
+        # self-contained zephyr.bin flashed at the 0x1000 ROM bootloader offset.
+        # The S3/C-series have the DRAM headroom and use sysbuild + MCUboot
+        # (handled in the blocks below).
+        if [[ $chip == "esp32" ]]; then
+            if [[ $2 == "companions" ]]; then
+                role="companion"
+                echo "Now building $board companion (simple boot)"
+                west build -b "$board" zephcore --pristine
+            elif [[ $2 == "repeaters" ]]; then
+                role="repeater"
+                echo "Now building $board repeater (simple boot)"
+                west build -b "$board" zephcore --pristine -- -DEXTRA_CONF_FILE="boards/common/repeater.conf"
+            else
+                continue
+            fi
+            # Simple-boot zephyr.bin is already the complete bootable image;
+            # wrap it in a full-flash merged image at the 0x1000 offset.
+            python -m esptool --chip "$chip" merge-bin \
+                --output firmware/"$board_clean_for_path"-"$role"-"$COMMIT_HASH"-merged.bin \
+                --flash-mode dio --flash-freq 40m --flash-size 4MB \
+                0x1000 build/zephyr/zephyr.bin
+            cp build/zephyr/zephyr.bin firmware/"$board_clean_for_path"-"$role"-"$COMMIT_HASH".bin
+            continue
+        fi
+
         if [[ $2 == "companions" ]]; then
             # build ESP32 companions (production is the default)
             echo "Now building $board companion"

@@ -37,11 +37,17 @@ station_g2/esp32s3/procpu
 heltec_wifi_lora32_v3/esp32s3/procpu
 heltec_wifi_lora32_v4/esp32s3/procpu
 heltec_wifi_lora32_v43/esp32s3/procpu
+ttgo_tbeam/esp32/procpu
 ```
 
 > ESP32 boards require `west blobs fetch hal_espressif` before first build.
 >
 > Heltec V3 console/shell use `uart0` (UART serial) in ZephCore.
+>
+> **LilyGo T-Beam** (`ttgo_tbeam/esp32/procpu`): classic ESP32 (PICO-D4) with
+> SX1262, AXP2101 PMU, and GNSS. Use this for the **v1.2 SX1262** variant — the
+> upstream Zephyr DTS models the SX1276 radio, which ZephCore overrides to
+> SX1262 in `board.overlay`. Console/CLI are on `uart0` (onboard USB-UART).
 
 ## MG24 (Silicon Labs)
 
