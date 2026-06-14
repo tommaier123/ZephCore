@@ -45,6 +45,18 @@ LOG_MODULE_REGISTER(linux_tcp_transport, LOG_LEVEL_INF);
 #define LISTEN_PORT      CONFIG_ZEPHCORE_LINUX_TCP_PORT
 #define LISTEN_BACKLOG   1
 
+/* TX congestion control (mirrors ZephyrBLE.cpp). Push codes >= 0x80 are
+ * lossy event signals; protocol response frames < 0x80 are lossless. */
+#define PUSH_CODE_BASE       0x80
+#define TX_OVERFLOW_RETRY_MS 250
+
+/* Bound on a single blocking send. tx_drain_work_fn runs on the system
+ * workqueue, so an unbounded zsock_send() against a peer that has stopped
+ * reading would hang the whole queue (incl. overflow_retry_work). A peer
+ * that can't accept one frame within this window is wedged — close it and
+ * let the app reconnect rather than stall the node. */
+#define TX_SEND_TIMEOUT_SEC  2
+
 struct frame {
 	uint16_t len;
 	uint8_t buf[MAX_FRAME_SIZE];
@@ -73,12 +85,44 @@ static bool listen_thread_started;
 static void tx_drain_work_fn(struct k_work *work);
 static K_WORK_DEFINE(tx_drain_work, tx_drain_work_fn);
 
+/* TX congestion control — ported from ZephyrBLE.cpp so the TCP transport
+ * back-pressures instead of dropping frames when the send queue fills (e.g.
+ * an advert/message push colliding with a channel/contact import burst).
+ *
+ *   1. Queue full  → set sticky tx_congested; senders check
+ *      zephcore_ble_is_congested() and hold off.
+ *   2. Lossless protocol frame (data[0] < 0x80) → return 0 so the caller
+ *      retries — never dropped.
+ *   3. Non-lossless push → stash one frame in overflow, retried every 250ms.
+ *   4. Drain below 1/3 (or empty) → clear congestion (hysteresis).
+ *   5. Disconnect → reset everything.
+ */
+static bool tx_congested;
+static struct frame overflow_frame;
+static bool overflow_pending;
+
+static void overflow_retry_work_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(overflow_retry_work, overflow_retry_work_fn);
+
+static bool is_lossless_protocol_frame(const uint8_t *data, uint16_t len)
+{
+	if (!data || len == 0) {
+		return false;
+	}
+	return data[0] < PUSH_CODE_BASE;
+}
+
 static void close_client_locked(void)
 {
 	if (client_fd >= 0) {
 		zsock_close(client_fd);
 		client_fd = -1;
 	}
+
+	/* Reset TX congestion state on disconnect (mirrors ZephyrBLE). */
+	overflow_pending = false;
+	tx_congested = false;
+	k_work_cancel_delayable(&overflow_retry_work);
 }
 
 /* Write `len` bytes, retrying on partial sends. Returns 0 or -errno. */
@@ -133,6 +177,15 @@ static void tx_drain_work_fn(struct k_work *work)
 	struct frame f;
 
 	while (k_msgq_get(&ble_send_queue, &f, K_NO_WAIT) == 0) {
+		/* Clear congestion at low water mark (1/3) — hysteresis vs full. */
+		if (tx_congested &&
+		    k_msgq_num_used_get(&ble_send_queue) <= FRAME_QUEUE_SIZE / 3) {
+			tx_congested = false;
+			LOG_INF("tx_drain: congestion cleared (queue=%u/%u)",
+				k_msgq_num_used_get(&ble_send_queue),
+				(unsigned)FRAME_QUEUE_SIZE);
+		}
+
 		k_mutex_lock(&sock_mu, K_FOREVER);
 		int fd = client_fd;
 
@@ -158,7 +211,11 @@ static void tx_drain_work_fn(struct k_work *work)
 		k_mutex_unlock(&sock_mu);
 
 		if (err != 0) {
-			LOG_WRN("tx send err=%d, closing client", err);
+			if (err == -EAGAIN || err == -EWOULDBLOCK) {
+				LOG_WRN("tx send timeout (peer not reading), closing client");
+			} else {
+				LOG_WRN("tx send err=%d, closing client", err);
+			}
 			k_mutex_lock(&sock_mu, K_FOREVER);
 			close_client_locked();
 			active_iface = ZEPHCORE_IFACE_NONE;
@@ -171,9 +228,52 @@ static void tx_drain_work_fn(struct k_work *work)
 		}
 	}
 
+	/* Queue fully drained — clear any residual congestion. */
+	if (tx_congested && k_msgq_num_used_get(&ble_send_queue) == 0) {
+		tx_congested = false;
+		LOG_INF("tx_drain: congestion cleared (queue empty)");
+	}
+
 	if (transport_cbs && transport_cbs->on_tx_idle &&
 	    k_msgq_num_used_get(&ble_send_queue) == 0) {
 		transport_cbs->on_tx_idle();
+	}
+}
+
+/* Re-inject the stashed overflow push once the queue has room. Mirrors
+ * ZephyrBLE.cpp's overflow_retry_work_fn. */
+static void overflow_retry_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	if (!overflow_pending) {
+		return;
+	}
+
+	/* Abandon overflow if the client is gone. */
+	k_mutex_lock(&sock_mu, K_FOREVER);
+	bool connected = (client_fd >= 0);
+
+	k_mutex_unlock(&sock_mu);
+
+	if (!connected) {
+		overflow_pending = false;
+		tx_congested = false;
+		LOG_INF("overflow cleared (disconnected)");
+		return;
+	}
+
+	if (k_msgq_put(&ble_send_queue, &overflow_frame, K_NO_WAIT) == 0) {
+		overflow_pending = false;
+		LOG_DBG("overflow frame queued hdr=0x%02x, kicking drain",
+			overflow_frame.buf[0]);
+		k_work_submit(&tx_drain_work);
+		/* Congestion flag cleared by tx_drain at low water mark. */
+	} else {
+		/* Still full — retry at reduced rate. */
+		LOG_DBG("overflow retry: queue still full, retry in %dms",
+			TX_OVERFLOW_RETRY_MS);
+		k_work_schedule(&overflow_retry_work, K_MSEC(TX_OVERFLOW_RETRY_MS));
 	}
 }
 
@@ -228,6 +328,15 @@ static void listen_thread_fn(void *a, void *b, void *c)
 			k_sleep(K_MSEC(100));
 			continue;
 		}
+
+		/* Bound blocking sends so a non-reading peer can't hang the
+		 * system workqueue (see TX_SEND_TIMEOUT_SEC). */
+		struct zsock_timeval sndtimeo = {
+			.tv_sec = TX_SEND_TIMEOUT_SEC,
+			.tv_usec = 0,
+		};
+		(void)zsock_setsockopt(fd, ZSOCK_SOL_SOCKET, ZSOCK_SO_SNDTIMEO,
+				       &sndtimeo, sizeof(sndtimeo));
 
 		k_mutex_lock(&sock_mu, K_FOREVER);
 		if (client_fd >= 0) {
@@ -349,8 +458,33 @@ size_t zephcore_ble_send(const uint8_t *data, uint16_t len)
 	memcpy(f.buf, data, len);
 
 	if (k_msgq_put(&ble_send_queue, &f, K_NO_WAIT) != 0) {
-		LOG_WRN("TX queue full, dropping len=%u", len);
-		return 0;
+		/* Queue full — enter congestion mode (mirrors ZephyrBLE.cpp).
+		 * Senders hold off via zephcore_ble_is_congested(). */
+		if (!tx_congested) {
+			LOG_WRN("TX queue full (%u/%u), entering congestion",
+				k_msgq_num_used_get(&ble_send_queue),
+				(unsigned)FRAME_QUEUE_SIZE);
+			tx_congested = true;
+		}
+
+		/* Lossless protocol response frames are never dropped — report
+		 * failure so the caller retries instead of clobbering overflow. */
+		if (is_lossless_protocol_frame(data, len)) {
+			LOG_DBG("TX queue full for lossless frame hdr=0x%02x, retry later",
+				data[0]);
+			return 0;
+		}
+
+		/* Non-lossless push: stash one frame in overflow, retried at
+		 * 250ms. If overflow is occupied, drop rather than clobber it. */
+		if (overflow_pending) {
+			LOG_WRN("overflow full, dropping push hdr=0x%02x", data[0]);
+			return 0;
+		}
+		overflow_frame = f;
+		overflow_pending = true;
+		k_work_schedule(&overflow_retry_work, K_MSEC(TX_OVERFLOW_RETRY_MS));
+		return len;  /* Accepted into overflow — will be retried. */
 	}
 
 	k_work_submit(&tx_drain_work);
@@ -389,8 +523,9 @@ bool zephcore_ble_is_connected(void)
 
 bool zephcore_ble_is_congested(void)
 {
-	return k_msgq_num_used_get(&ble_send_queue) >=
-	       (CONFIG_ZEPHCORE_BLE_QUEUE_SIZE * 2 / 3);
+	/* Sticky flag (mirrors ZephyrBLE): set at full, cleared at 1/3.
+	 * Callers also check the 2/3 high-water mark on the raw queue. */
+	return tx_congested;
 }
 
 bool zephcore_ble_is_advertising(void)
