@@ -1677,10 +1677,16 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 				_contact_iter_since = 0;
 			}
 
-			// Send PACKET_CONTACT_START with total count (unfiltered)
+			// Send PACKET_CONTACT_START with total count (unfiltered, but excluding
+			// transient anon slots -- continueContactIteration() never streams those)
+			uint32_t total = 0;
+			for (int i = 0; i < getNumContacts(); i++) {
+				ContactInfo c;
+				if (getContactByIdx(i, c) && c.type != ADV_TYPE_NONE) total++;
+			}
 			uint8_t rsp[5];
 			rsp[0] = PACKET_CONTACT_START;
-			put_le32(&rsp[1], (uint32_t)getNumContacts());
+			put_le32(&rsp[1], total);
 			writeFrame(rsp, sizeof(rsp));
 			_contact_iter_idx = 0;
 			_contact_iter_lastmod = 0;
@@ -2975,6 +2981,7 @@ bool CompanionMesh::handleProtocolFrame(const uint8_t *data, size_t len)
 				memcpy(anon.id.pub_key, &data[1], PUB_KEY_SIZE);
 				anon.out_path_len = 0;       // zero-hop direct by default
 				anon.type = ADV_TYPE_NONE;   // transient/unknown
+				anon.lastmod = getRTCClock()->getCurrentTime();  // so slot recycling is LRU, not always slot 0
 				if (addContact(anon)) {
 					contact = lookupContactByPubKey(&data[1], PUB_KEY_SIZE);
 				}

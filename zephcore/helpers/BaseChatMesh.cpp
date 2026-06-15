@@ -107,7 +107,11 @@ ContactInfo *BaseChatMesh::allocateContactSlot(bool transient_only)
 			}
 		}
 		if (oldest_idx >= 0) {
-			onContactOverwrite(contacts[oldest_idx].id.pub_key);
+			if (!transient_only) {
+				// recycling an anon slot isn't a "contact deleted" event -- the
+				// app was never told this transient pubkey existed
+				onContactOverwrite(contacts[oldest_idx].id.pub_key);
+			}
 			return &contacts[oldest_idx];
 		}
 	}
@@ -163,6 +167,11 @@ void BaseChatMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, 
 		packet->header |= ROUTE_TYPE_FLOOD;
 		plen = packet->writeTo(temp_buf);
 		packet->header = save;
+	}
+
+	if (from && from->type == ADV_TYPE_NONE) {  // matched a transient anon/ANON_REQ slot -- promote to a real contact
+		*from = ContactInfo{};
+		from = nullptr;
 	}
 
 	bool is_new = false;
