@@ -74,6 +74,11 @@ static const struct device *panel_vdd_reg;
 static uint32_t epd_frame_hash;
 static uint32_t epd_last_frame_hash = UINT_MAX;
 
+/* Periodic full refresh: count partial refreshes and force a full refresh
+ * every CONFIG_ZEPHCORE_DISPLAY_EPD_FULL_REFRESH_INTERVAL frames to clear
+ * accumulated e-paper ghosting.  0 = disabled (partial-only). */
+static uint32_t epd_partial_count;
+
 static inline void epd_hash_bytes(const void *data, size_t len)
 {
 	if (!is_epd || !data || len == 0) {
@@ -512,7 +517,23 @@ void mc_display_finalize(void)
 	if (is_epd && epd_frame_hash == epd_last_frame_hash) {
 		return;
 	}
-	cfb_framebuffer_finalize(disp_dev);
+
+	const int full_interval = CONFIG_ZEPHCORE_DISPLAY_EPD_FULL_REFRESH_INTERVAL;
+
+	if (is_epd && full_interval > 0 && ++epd_partial_count >= (uint32_t)full_interval) {
+		/* Periodic full refresh to clear accumulated ghosting.
+		 * blanking_on selects the FULL profile and loads RAM without
+		 * updating the panel; cfb_framebuffer_finalize writes the
+		 * current framebuffer into both RAM banks; blanking_off then
+		 * triggers the full-refresh update with that content. */
+		display_blanking_on(disp_dev);
+		cfb_framebuffer_finalize(disp_dev);
+		display_blanking_off(disp_dev);
+		epd_partial_count = 0;
+	} else {
+		cfb_framebuffer_finalize(disp_dev);
+	}
+
 	if (is_epd) {
 		epd_last_frame_hash = epd_frame_hash;
 	}
@@ -553,6 +574,7 @@ void mc_display_epd_full_reset(void)
 	display_blanking_on(disp_dev);
 	display_blanking_off(disp_dev);
 	epd_last_frame_hash = UINT_MAX;
+	epd_partial_count = 0;
 
 	/* After splash handoff, keep frontlight off; next user interaction
 	 * wakes it via mc_display_on(). */

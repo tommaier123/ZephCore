@@ -736,6 +736,20 @@ config ZEPHCORE_DISPLAY_INSET
 	  hardware artefacts — a small inset hides them behind a clean
 	  background margin.  Set to 0 on boards without edge artefacts.
 
+config ZEPHCORE_DISPLAY_EPD_FULL_REFRESH_INTERVAL
+	int "E-paper full-refresh interval (partial refreshes)"
+	default 8
+	depends on ZEPHCORE_UI_DISPLAY
+	help
+	  On e-paper panels, partial refreshes never fully clear the previous
+	  image, so ghosting accumulates where text changes most (status bar
+	  name/time/battery).  After this many partial refreshes, perform one
+	  full refresh to clear the panel.  A full refresh is the ~2 s
+	  black/white flash, so keep this large enough that it isn't constant
+	  but small enough that ghosting never becomes unreadable.  Set to 0 to
+	  disable periodic full refreshes (partial-only — accumulates ghosting).
+	  Ignored on non-EPD displays (OLED/TFT never ghost).
+
 config ZEPHCORE_DISPLAY_LARGE_FONT
 	bool "Use a larger built-in CFB font"
 	default n
