@@ -24,6 +24,47 @@
  */
 
 #include <zephyr/dt-bindings/lora/sx126x.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/*
+ * User button — GPIO38, the middle button on the T-Beam (Arduino PIN_USER_BTN=38,
+ * Meshtastic BUTTON_PIN=38). The upstream ttgo_tbeam DTS defines no button, so
+ * declare the full gpio-keys node plus the single-button input chain the UI
+ * consumes (short press = page/select, long press = action), same scheme as the
+ * heltec_wifi_lora32_v3 companion.
+ *
+ * GPIO38 is input-only on the classic ESP32 (GPIO34-39 have no internal pull
+ * resistors), so request no pull and rely on the board's external pull-up — the
+ * button shorts the line to GND when pressed. (Arduino/Meshtastic set a pull-up
+ * flag here too, but it is a no-op on this pin; the external pull-up is real.)
+ */
+/ {
+	buttons: buttons {
+		compatible = "gpio-keys";
+
+		user_button: button_0 {
+			gpios = <&gpio1 6 GPIO_ACTIVE_LOW>;  /* GPIO38 = gpio1 pin 6 */
+			label = "User Button";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+
+	user_btn_longpress {
+		compatible = "zephyr,input-longpress";
+		input = <&buttons>;
+		input-codes = <INPUT_KEY_0>;
+		short-codes = <INPUT_KEY_A>;
+		long-codes = <INPUT_KEY_ENTER>;
+		long-delay-ms = <1000>;
+	};
+
+	page_btn_multitap {
+		compatible = "zephcore,input-multi-tap";
+		input-codes = <INPUT_KEY_A>;
+		tap-codes = <INPUT_KEY_1 INPUT_KEY_LEFT>;
+		tap-delay-ms = <400>;
+	};
+};
 
 /*
  * BT HCI controller. The upstream ttgo_tbeam DTS does not select the ESP32 BT
