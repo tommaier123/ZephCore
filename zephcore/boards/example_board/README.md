@@ -42,6 +42,7 @@ SWD flash: `west flash` (requires J-Link, pyocd, or nrfjprog connected).
 | Heltec V3            | `west build -b heltec_wifi_lora32_v3/esp32s3/procpu zephcore` | `west flash` |
 | Heltec V4.2 (GC1109 PA)  | `west build -b heltec_wifi_lora32_v4/esp32s3/procpu zephcore`  | `west flash` |
 | Heltec V4.3 (KCT8103L PA) | `west build -b heltec_wifi_lora32_v43/esp32s3/procpu zephcore` | `west flash` |
+| Heltec Wireless Tracker | `west build -b heltec_wireless_tracker/esp32s3/procpu zephcore` | `west flash` |
 
 **Heltec V3 console:** ZephCore routes console/shell to `uart0` on V3. Use the UART serial port for boot logs and CLI.
 

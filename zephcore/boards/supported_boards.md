@@ -37,12 +37,16 @@ station_g2/esp32s3/procpu
 heltec_wifi_lora32_v3/esp32s3/procpu
 heltec_wifi_lora32_v4/esp32s3/procpu
 heltec_wifi_lora32_v43/esp32s3/procpu
+heltec_wireless_tracker/esp32s3/procpu
 ttgo_tbeam/esp32/procpu
 ```
 
 > ESP32 boards require `west blobs fetch hal_espressif` before first build.
 >
 > Heltec V3 console/shell use `uart0` (UART serial) in ZephCore.
+>
+> **Heltec Wireless Tracker** (`heltec_wireless_tracker/esp32s3/procpu`): V1.1
+> ESP32-S3-FN8 companion with SX1262, ST7735R 160x80 TFT, and UC6580 GPS.
 >
 > **LilyGo T-Beam** (`ttgo_tbeam/esp32/procpu`): classic ESP32 (PICO-D4) with
 > SX1262, AXP2101 PMU, and GNSS. Use this for the **v1.2 SX1262** variant — the

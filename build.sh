@@ -40,6 +40,7 @@ ESP32_boards=(
     heltec_wifi_lora32_v3/esp32s3/procpu
     heltec_wifi_lora32_v4/esp32s3/procpu
     heltec_wifi_lora32_v43/esp32s3/procpu
+    heltec_wireless_tracker/esp32s3/procpu
     ttgo_tbeam/esp32/procpu
 )
 

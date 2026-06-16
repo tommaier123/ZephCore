@@ -224,15 +224,23 @@
 };
 
 /*
- * Flash partitions — FN8 is 8 MB but the upstream AMP table covers only
- * the lower 4 MB (0x000000-0x3FFFFF). Place LittleFS in the unused upper
- * half at 0x400000 (384 KB). No existing partitions are touched.
+ * Flash partitions — reclaim unused space from 8MB layout (matches the
+ * Heltec V3, the same ESP32-S3-FN8 platform).  Delete lpcore slots, storage,
+ * scratch, and coredump partitions.  Repurpose 0x7A0000 - 0x800000 (384KB)
+ * for LittleFS.
  */
+/delete-node/ &slot0_lpcore_partition;
+/delete-node/ &slot1_lpcore_partition;
+/delete-node/ &storage_partition;
+/delete-node/ &scratch_partition;
+/delete-node/ &coredump_partition;
+
 &flash0 {
 	partitions {
-		lfs_partition: partition@400000 {
+		/* LittleFS 384KB for DataStore + file-based BLE settings */
+		lfs_partition: partition@7a0000 {
 			label = "lfs";
-			reg = <0x400000 0x60000>;
+			reg = <0x7A0000 0x60000>;
 		};
 	};
 };
