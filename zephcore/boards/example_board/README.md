@@ -43,6 +43,7 @@ SWD flash: `west flash` (requires J-Link, pyocd, or nrfjprog connected).
 | Heltec V4.2 (GC1109 PA)  | `west build -b heltec_wifi_lora32_v4/esp32s3/procpu zephcore`  | `west flash` |
 | Heltec V4.3 (KCT8103L PA) | `west build -b heltec_wifi_lora32_v43/esp32s3/procpu zephcore` | `west flash` |
 | Heltec Wireless Tracker | `west build -b heltec_wireless_tracker/esp32s3/procpu zephcore` | `west flash` |
+| LilyGo T-Beam v1.2     | `west build -b ttgo_tbeam/esp32/procpu zephcore`               | `west flash` |
 
 **Heltec V3 console:** ZephCore routes console/shell to `uart0` on V3. Use the UART serial port for boot logs and CLI.
 
@@ -50,6 +51,13 @@ SWD flash: `west flash` (requires J-Link, pyocd, or nrfjprog connected).
 unclear, check GPIO2's default pull: the V4.2 GC1109 PA has an internal pull-down
 (GPIO2 reads LOW at boot), while the V4.3 KCT8103L PA has an internal pull-up
 (GPIO2 reads HIGH). Only difference in firmware: TX control pin GPIO46→GPIO5.
+
+**LilyGo T-Beam v1.2:** Classic ESP32 (PICO-D4) board — several caveats apply:
+- Upstream Zephyr DTS models the SX1276 variant; `board.overlay` overrides the radio node to SX1262 on the same SPI3 wiring.
+- PICO-D4 rev 1.0 bootloops when the bootloader tries to enable QIO flash mode. `board.conf` forces DIO (`CONFIG_ESPTOOLPY_FLASHMODE_DIO=y`). Any new classic ESP32 board with PICO-D4 needs this.
+- Classic ESP32 DRAM is much smaller than ESP32-S3. `board.conf` shrinks contacts/channels/queue (`MAX_CONTACTS=160`, `MAX_CHANNELS=8`, `OFFLINE_QUEUE_SIZE=128`) to fit.
+- AXP2101 PMU manages LoRa and GPS power rails via Zephyr regulator + fuel-gauge drivers (auto-enabled from the upstream DTS PMU nodes). Add `CONFIG_FUEL_GAUGE=y` to boards that expose battery state-of-charge over I2C.
+- Console/CLI are on `uart0` (onboard USB-UART). No native USB on classic ESP32.
 
 ESP32 flash uses esptool over USB via `west flash`. Hold BOOT button if the device
 doesn't enter download mode automatically.
@@ -66,6 +74,26 @@ west build -b <board>/esp32s3/procpu zephcore --pristine --sysbuild -- \
   -DEXTRA_CONF_FILE="boards/common/wifi_ota.conf"
 west flash --esp-device COMX
 ```
+
+### SX127x Boards (loramac-node backend)
+
+ZephCore supports SX1272/SX1276/SX1278 via the loramac-node backend — a separate radio path from the native SX126x driver used by all other boards. The TTGO LoRa32 is the reference implementation:
+
+| Board          | Build string                                   | Flash        |
+|----------------|------------------------------------------------|--------------|
+| TTGO LoRa32    | `west build -b ttgo_lora32/esp32/procpu zephcore` | `west flash` |
+
+SX127x boards require these `board.conf` overrides (the `zephcore_common.conf` default enables the native SX126x path):
+
+```kconfig
+CONFIG_LORA_MODULE_BACKEND_NATIVE=n
+CONFIG_LORA_MODULE_BACKEND_LORAMAC_NODE=y
+CONFIG_ZEPHCORE_RADIO_SX127X=y
+CONFIG_ZEPHCORE_LORA_RX_DUTY_CYCLE=n   # lora_recv_duty_cycle not implemented for SX127x
+CONFIG_ZEPHCORE_DEFAULT_TX_POWER_DBM=17 # PA_BOOST max without external PA
+```
+
+Classic ESP32 + PICO-D4 also need the DIO flash mode fix (see T-Beam note above).
 
 **One-time setup required (all ESP32 boards):**
 
@@ -248,6 +276,9 @@ should ONLY contain settings that can't be inferred from hardware:
     CONFIG_HEAP_MEM_POOL_SIZE           Override for large displays (>128x64)
     CONFIG_SEGGER_RTT_BUFFER_SIZE_UP    Shrink RTT on RAM-tight boards
     CONFIG_ESPTOOLPY_FLASHSIZE_16MB     ESP32 boards with 16MB flash
+    CONFIG_ESPTOOLPY_FLASHMODE_DIO=y    Classic ESP32 PICO-D4 boards (bootloops otherwise)
+    CONFIG_ESPTOOLPY_FLASHMODE_QIO=n    Companion to the DIO override above
+    CONFIG_FUEL_GAUGE=y                 Boards with AXP2101 or other I2C fuel gauge
     CONFIG_ZEPHCORE_DEFAULT_TX_POWER_DBM  Boards with external PA
     CONFIG_ZEPHCORE_MAX_TX_POWER_DBM      Boards with external PA
     CONFIG_ZEPHCORE_APC                   Adaptive Power Control — OFF by default.
@@ -331,16 +362,16 @@ Quick Reference: Wio-SX1262 XIAO Pin Mapping
 
 All XIAO boards use the same D-pin assignment for Wio-SX1262:
 
-    Signal | XIAO Pin | nRF52840  | nRF54L15  | MG24      | ESP32-C3
-    -------|----------|-----------|-----------|-----------|--------
-    DIO1   | D1       | P0.03     | P1.05     | PC01      | GPIO3
-    RESET  | D2       | P0.28     | P1.06     | PC02      | GPIO4
-    BUSY   | D3       | P0.05     | P1.07     | PC03      | GPIO5
-    NSS    | D4       | P0.04     | P1.10     | PC04      | GPIO6
-    RXEN   | D5       | P0.29     | P1.11     | PC05      | GPIO7
-    SCK    | D8       | P1.13     | P2.01     | PA03      | GPIO8
-    MISO   | D9       | P1.14     | P2.04     | PA04      | GPIO9
-    MOSI   | D10      | P1.15     | P2.02     | PA05      | GPIO10
+    Signal | XIAO Pin | nRF52840  | nRF54L15  | MG24      | ESP32-C3  | ESP32-C6  | ESP32-S3
+    -------|----------|-----------|-----------|-----------|-----------|-----------|----------
+    DIO1   | D1       | P0.03     | P1.05     | PC01      | GPIO3     | GPIO1     | GPIO39
+    RESET  | D2       | P0.28     | P1.06     | PC02      | GPIO4     | GPIO2     | GPIO42
+    BUSY   | D3       | P0.05     | P1.07     | PC03      | GPIO5     | GPIO21    | GPIO40
+    NSS    | D4       | P0.04     | P1.10     | PC04      | GPIO6     | GPIO22    | GPIO41
+    RXEN   | D5       | P0.29     | P1.11     | PC05      | GPIO7     | GPIO23    | GPIO38
+    SCK    | D8       | P1.13     | P2.01     | PA03      | GPIO8     | GPIO19    | GPIO7
+    MISO   | D9       | P1.14     | P2.04     | PA04      | GPIO9     | GPIO20    | GPIO8
+    MOSI   | D10      | P1.15     | P2.02     | PA05      | GPIO10    | GPIO18    | GPIO9
 
 Note: nRF52840 D-pin mapping varies by board (XIAO nRF52840 shown).
 RAK4631 has SX1262 integrated — different pinout entirely.

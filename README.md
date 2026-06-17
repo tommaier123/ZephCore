@@ -46,6 +46,8 @@ Other benefits:
 | **Heltec V3** | ESP32-S3 | SX1262 | OLED (SSD1306), 8MB flash |
 | **Heltec V4.2** | ESP32-S3 | SX1262 + GC1109 PA | OLED (SSD1306), 16MB flash, 2MB PSRAM |
 | **Heltec V4.3** | ESP32-S3 | SX1262 + KCT8103L PA | OLED (SSD1306), 16MB flash, 2MB PSRAM |
+| **Heltec Wireless Tracker** | ESP32-S3 | SX1262 | ST7735R 160×80 TFT, UC6580 GPS |
+| **LilyGo T-Beam v1.2** | ESP32 (PICO-D4) | SX1262 | AXP2101 PMU, GNSS, USB-UART CLI |
 
 ### Other
 
@@ -204,7 +206,9 @@ Key Kconfig options (set in board configs or via `-D` flags):
 | `CONFIG_ZEPHCORE_MAX_CONTACTS` | 350 | Contact storage slots (companion) |
 | `CONFIG_ZEPHCORE_MAX_CHANNELS` | 40 | Channel slots (companion) |
 | `CONFIG_ZEPHCORE_BLE_PASSKEY` | 123456 | BLE pairing PIN |
-| `CONFIG_ZEPHCORE_GPS_POLL_INTERVAL_SEC` | 300 | GPS fix interval (seconds) |
+| `CONFIG_ZEPHCORE_GPS_POLL_INTERVAL_SEC` | 300 | Companion GPS duty interval between fixes (seconds); 0 = always-on |
+| `CONFIG_ZEPHCORE_GPS_FIRST_FIX_TIMEOUT_SEC` | 300 | Cold-start window for the very first fix (longer to allow almanac download) |
+| `CONFIG_ZEPHCORE_REPEATER_GPS_INTERVAL_SEC` | 172800 | Repeater/room-server GPS duty interval boot default (48 h); 0 = always-on |
 | `CONFIG_ZEPHCORE_WIFI_OTA` | n | WiFi AP + HTTP OTA updates (ESP32 repeaters, requires `--sysbuild`) |
 | `CONFIG_ZEPHCORE_REPEATER_UPLINK` | n | Repeater WiFi+MQTT uplink (ESP32) |
 | `CONFIG_ZEPHCORE_PACKET_LOGGING` | n | Arduino-compatible mesh packet logging |

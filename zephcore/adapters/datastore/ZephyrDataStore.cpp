@@ -134,7 +134,7 @@ void ZephyrDataStore::begin()
 	checkAdvBlobFile();
 }
 
-bool ZephyrDataStore::exists(const char *path)
+bool ZephyrDataStore::exists(const char *path) const
 {
 	struct fs_dirent ent;
 	return fs_stat(path, &ent) == 0;
@@ -145,7 +145,7 @@ bool ZephyrDataStore::removeFile(const char *path)
 	return fs_unlink(path) == 0;
 }
 
-bool ZephyrDataStore::openRead(const char *path, uint8_t *buf, size_t buf_sz, size_t &out_len)
+bool ZephyrDataStore::openRead(const char *path, uint8_t *buf, size_t buf_sz, size_t &out_len) const
 {
 	struct fs_file_t file;
 	fs_file_t_init(&file);

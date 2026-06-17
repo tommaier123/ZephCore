@@ -90,9 +90,9 @@ private:
 
 	void checkAdvBlobFile();
 	void migrateToExternalFS();
-	bool openRead(const char *path, uint8_t *buf, size_t buf_sz, size_t &out_len);
+	bool openRead(const char *path, uint8_t *buf, size_t buf_sz, size_t &out_len) const;
 	bool atomicReplaceFile(const char *path, const uint8_t *buf, size_t len);
-	bool exists(const char *path);
+	bool exists(const char *path) const;
 	bool removeFile(const char *path);
 	bool copyFile(const char *src, const char *dst);
 };

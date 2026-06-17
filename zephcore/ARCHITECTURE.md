@@ -429,8 +429,9 @@ Power: `powersaving on/off`
 - Nordic UART Service (NUS) with AUTHEN permissions on CCC + RX (forces pairing)
 - Passkey-based MITM pairing (SC + MITM + Bonding), runtime configurable PIN via `app_passkey` callback
 - DisplayOnly IO capability — phone enters passkey displayed on device / known to user
-- Advertising with public identity address (no RPA) — required for Android Flutter BLE app compatibility
-- `CONFIG_BT_PRIVACY` disabled: Android's Flutter BLE plugin fails to `connectGatt()` to RPA-advertised devices from app context; iOS and Android system BT settings handle RPA fine but the MeshCore app doesn't. Arduino MeshCore also uses public addresses.
+- Advertising always uses `BT_LE_ADV_OPT_USE_IDENTITY` — exposes the stable identity address even when privacy is enabled, preserving Android connect-from-app
+- `CONFIG_BT_PRIVACY` **disabled** on nRF52840 / MG24: identity address is advertised directly; both iOS and Android work without RPA. Android's Flutter BLE plugin fails `connectGatt()` to RPA-advertised devices from app context.
+- `CONFIG_BT_PRIVACY` **enabled** on ESP32-S3 (`boards/common/esp32_common.conf`): the Espressif controller's privacy-OFF Secure-Connections path produces a MIC failure against iOS (HCI disconnect `0x3d` at encryption start). Privacy ON keeps the controller on its working SC path. `USE_IDENTITY` advertising preserves Android compatibility. Do **not** remove `USE_IDENTITY` while ESP32 privacy is on.
 - Pairing triggered reactively: phone hits ATT error 0x05 on secured attribute → initiates SMP pairing (Apple Accessory Design Guidelines §55 compliant — no proactive Security Request)
 - TX congestion control: queue (12 frames) + overflow buffer + retry + timeout watchdog
 - Fast/slow advertising switching with post-disconnect flap prevention
@@ -442,11 +443,21 @@ Power: `powersaving on/off`
 
 - **Internal**: LittleFS on flash (`/lfs`), 256-byte cache for reduced flash I/O
 - **External**: Optional LittleFS on QSPI (`/ext`) with auto-migration
-- **BLE bonds**: File-based settings on LittleFS (`/lfs/settings/`) — all platforms (no NVS)
+- **BLE bonds**: NVS (`storage_partition`, 0xD0000 on nRF52) via Zephyr settings backend (≥1.16.2)
 - **Prefs**: 292-byte binary format, Arduino-compatible, field-by-field I/O (see §13)
 - **Contacts**: 152-byte records, stored on external flash if available
 - **Channels**: 68-byte records (4 pad + 32 name + 32 secret)
 - **Blobs**: Fixed-size records with LRU eviction by timestamp
+
+**First-boot migration (3-way FS self-heal)**
+
+A marker file `/lfs/_zc_init` is written after the first clean ZephCore boot. On every subsequent boot it is present and the logic below is skipped. On first boot (marker absent), `main_companion.cpp` picks one of three paths before `bt_enable()` runs:
+
+1. **No prefs, or Arduino MeshCore prefs** → full LFS + NVS format. Arduino's `new_prefs` omits `node_lat`/`node_lon`, shifting `freq`/`sf`/`bw` by 16 bytes; `prefsLookLikeArduino()` detects this by range-checking those fields. Covers fresh installs and Arduino → ZephCore migrations.
+2. **Valid ZephCore prefs + `/lfs/settings` present** → NVS-only erase (`formatNVSOnly()`). ZephCore ≤1.16.1 stored BLE bonds in `/lfs/settings` (file backend); ≤1.16.1 used 0xD0000 as app code, so bytes there may pass NVS sector validation and hang `settings_load()`. Identity/prefs/contacts are preserved; re-pairing is required.
+3. **Valid ZephCore prefs + no `/lfs/settings`** → skip format entirely. NVS was already initialised by ZephCore ≥1.16.2; bonds survive the upgrade.
+
+`loadPrefs()` also range-checks `freq`/`sf`/`bw` after deserialisation and reverts to compile-time defaults on out-of-range values, so a misread Arduino prefs file never corrupts the radio config.
 
 ### 7.3 GPS (`adapters/gps/`)
 
@@ -454,8 +465,27 @@ Power: `powersaving on/off`
 - 3 consecutive good fixes (≥4 satellites) required before reporting
 - Multi-constellation: GPS+GLONASS+Galileo+BeiDou with fallback
 - T1000-E: Complex 6-GPIO power sequencing with VRTC preservation
-- Repeater mode: 48-hour wake interval for time sync only
 - GPS time blocks phone time sync for 2 hours after last fix
+
+**Duty cycle vs always-on**
+
+`gps_wake_interval_ms` (initialised from `prefs.gps_interval`) controls the mode:
+
+- **Duty cycling** (`gps_wake_interval_ms > 0`): after acquiring 3 good fixes the GPS powers down; the state machine wakes it again after the configured standby interval. The fix callback fires and then the GPS sleeps.
+- **Always-on** (`gps_wake_interval_ms == 0`): the GPS never powers down. `consecutive_good_fixes` is reset after each promotion so the 3-fix gate cycles continuously, streaming fresh positions. Flash writes and fix callbacks are rate-limited to once per `gps_acquire_timeout_ms` to avoid hammering storage.
+
+`gps_set_poll_interval_sec(0)` switches to always-on live; persisted via `prefs.gps_interval` (set by `set gps duty 0`).
+
+**Timeout split**
+
+Two separate timeouts apply to acquisition:
+
+- `CONFIG_ZEPHCORE_GPS_FIRST_FIX_TIMEOUT_SEC` (default 300s): the cold-start window used for the very first acquisition after `gps_enable()`. Longer to allow almanac download.
+- `CONFIG_ZEPHCORE_GPS_FIX_TIMEOUT_SEC` (default 120s): the normal per-wake timeout for all subsequent acquisitions (warm start).
+
+**Repeater mode**
+
+Repeaters and room servers default to `CONFIG_ZEPHCORE_REPEATER_GPS_INTERVAL_SEC` (48 h) for GPS duty — GPS wakes only for a periodic time-sync fix (5-minute acquire window). The interval is now unified with companion via `prefs.gps_interval` and is configurable at runtime via `set gps duty <sec>`; persists across reboots.
 
 ### 7.4 USB (`adapters/usb/`)
 
@@ -569,6 +599,8 @@ prj.conf (base: console; production defaults — LOG=n, ASSERT=n)
 | XIAO ESP32-C6 | ESP32-C6 | SX1262 | - | - | - | - | - | 300 |
 | LilyGo TLoRa C6 | ESP32-C6 | SX1262 | - | - | - | - | - | 300 |
 | Station G2 | ESP32-S3 | SX1262+PA | UART1 | OLED 128x64 | - | 1 button | - | 350 |
+| Heltec Wireless Tracker | ESP32-S3 | SX1262 | UC6580 | TFT 160x80 | - | - | - | 350 |
+| LilyGo T-Beam v1.2 | ESP32 | SX1262 | gnss-nmea | - | - | - | - | 300 |
 | XIAO MG24 | EFR32MG24 | SX1262 | - | - | - | - | - | 350 |
 
 ---
@@ -667,7 +699,7 @@ Over USB CDC: V3 framing: `[2B LE length] [1B opcode] [payload...]`
 | `/lfs/adv_blobs` or `/ext/adv_blobs` | Advert cache | Fixed-size blob records |
 | `/lfs/repeater/acl` | Client ACL | 136B × N records |
 | `/lfs/repeater/regions2` | Region map | Header + 164B × N entries |
-| `/lfs/settings/` | BLE bonds + Zephyr settings | File-based settings (all platforms) |
+| `storage_partition` (NVS, 0xD0000 nRF52) | BLE bonds + Zephyr settings | NVS settings backend (≥1.16.2; old `/lfs/settings` file detected by self-heal) |
 
 ### Preferences Binary Layout (292 bytes)
 
