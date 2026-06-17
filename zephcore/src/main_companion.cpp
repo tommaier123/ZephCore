@@ -939,6 +939,43 @@ int main(void)
 	}
 	data_store.begin();
 
+	/* First-boot migration: fix NVS (BLE bonds) before bt_enable() runs.
+	 *
+	 * nRF52 stores BLE bonds in storage_partition (NVS) at 0xD0000.  UF2
+	 * flashing only writes pages covered by the binary, leaving whatever was
+	 * there before.  Old firmware (Arduino MeshCore, ZephCore ≤1.16.1) used
+	 * that region as app code; if those bytes accidentally pass Zephyr NVS
+	 * sector validation, settings_load() hangs and BLE never advertises.
+	 *
+	 * A marker file /lfs/_zc_init is written after the first clean boot.
+	 * If absent, we are on the first run of this ZephCore build:
+	 *
+	 *  • No prefs, or Arduino prefs (layout-incompatible): full format.
+	 *    Covers fresh installs and Arduino MeshCore migrations.
+	 *
+	 *  • Valid ZephCore prefs + /lfs/settings present: NVS erase only.
+	 *    The old file-based bonds backend (ZephCore ≤1.16.1) left this file;
+	 *    0xD0000 is old app code → must erase.  Identity/prefs/contacts
+	 *    are preserved; re-pair required (bonds were in /lfs/settings which
+	 *    the NVS backend ignores anyway).
+	 *
+	 *  • Valid ZephCore prefs + no /lfs/settings: NVS was already initialized
+	 *    by ZephCore ≥1.16.2 — skip format entirely, bonds survive. */
+	if (!data_store.hasInitMarker()) {
+		if (!data_store.hasPrefs() || data_store.prefsLookLikeArduino()) {
+			LOG_WRN("First ZephCore boot (%s) — formatting LFS + NVS",
+				data_store.hasPrefs() ? "Arduino prefs" : "no prefs");
+			data_store.formatFileSystem();
+			data_store.begin();
+		} else if (data_store.hasOldSettingsFile()) {
+			LOG_WRN("Pre-NVS ZephCore upgrade (found /lfs/settings) — erasing NVS");
+			data_store.formatNVSOnly();
+		} else {
+			LOG_INF("ZephCore upgrade with valid NVS — skipping format, bonds preserved");
+		}
+		data_store.writeInitMarker();
+	}
+
 	/* Initialize sensor manager (GPS, environment sensors) */
 	sensor_manager_init();
 
@@ -991,6 +1028,7 @@ int main(void)
 	companion_mesh.prefs.apc_enabled = 0;       /* Default: APC off */
 	companion_mesh.prefs.apc_margin = 20;       /* Companions: more conservative margin (mobile) */
 	companion_mesh.prefs.auto_shutdown_mv = CONFIG_ZEPHCORE_AUTO_SHUTDOWN_MILLIVOLTS; /* low-batt cutoff (0=off) */
+	companion_mesh.prefs.gps_interval = CONFIG_ZEPHCORE_GPS_POLL_INTERVAL_SEC; /* 5-min duty cycle (0=always-on) */
 
 	/* Load prefs from storage */
 	data_store.loadPrefs(companion_mesh.prefs);

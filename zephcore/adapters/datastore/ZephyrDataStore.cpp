@@ -362,6 +362,81 @@ void ZephyrDataStore::factoryReset()
 	}
 }
 
+/* ── First-boot migration ──────────────────────────────────────────── */
+
+/* Marker written after the first clean ZephCore boot to prevent
+ * repeated auto-format on subsequent boots. */
+static constexpr const char *ZC_INIT_MARKER = "/lfs/_zc_init";
+
+bool ZephyrDataStore::hasInitMarker() const
+{
+	return exists(ZC_INIT_MARKER);
+}
+
+void ZephyrDataStore::writeInitMarker()
+{
+	struct fs_file_t f;
+	fs_file_t_init(&f);
+	if (fs_open(&f, ZC_INIT_MARKER, FS_O_CREATE | FS_O_WRITE) == 0) {
+		fs_close(&f);
+	}
+}
+
+bool ZephyrDataStore::hasPrefs() const
+{
+	return exists(PREFS_FILE);
+}
+
+/* Erase only the NVS (BLE bonds) partition — used when upgrading from
+ * firmware that had the storage_partition region as app code.  That leaves
+ * bytes at 0xD0000 that can accidentally pass Zephyr NVS sector validation,
+ * causing settings_load() to hang and blocking bt_enable(). */
+void ZephyrDataStore::formatNVSOnly()
+{
+#if FIXED_PARTITION_EXISTS(storage_partition)
+	const struct flash_area *fap;
+	int rc = flash_area_open(PARTITION_ID(storage_partition), &fap);
+	if (rc == 0) {
+		LOG_INF("formatNVSOnly: erasing NVS storage (%u bytes)", (unsigned)fap->fa_size);
+		flash_area_flatten(fap, 0, fap->fa_size);
+		flash_area_close(fap);
+	} else {
+		LOG_WRN("formatNVSOnly: flash_area_open(storage_partition) failed: %d", rc);
+	}
+#else
+	LOG_DBG("formatNVSOnly: no storage_partition on this platform, skipped");
+#endif
+}
+
+/* Returns true if the prefs file was written by Arduino MeshCore.
+ * Arduino's layout omits node_lat/node_lon (16 bytes inserted by ZephCore
+ * after node_name at offset 36), so freq/sf/bw land at the wrong offsets
+ * and produce values outside the physical RF ranges used as the signal. */
+bool ZephyrDataStore::prefsLookLikeArduino() const
+{
+	uint8_t buf[72];
+	size_t len = 0;
+	if (!openRead(PREFS_FILE, buf, sizeof(buf), len) || len < 68) {
+		return false;
+	}
+	float freq, bw;
+	uint8_t sf;
+	memcpy(&freq, &buf[56], sizeof(float));
+	sf = buf[60];
+	memcpy(&bw, &buf[64], sizeof(float));
+	return (freq < 300.0f || freq > 960.0f ||
+	        sf < 5 || sf > 12 ||
+	        bw < 6.0f || bw > 510.0f);
+}
+
+/* Returns true if the old file-based BLE bonds file exists.
+ * Pre-NVS ZephCore (≤1.16.1) stored bonds via CONFIG_SETTINGS_FILE at this
+ * path; ≥1.16.2 moved to NVS.  Presence means 0xD0000 has old app code. */
+bool ZephyrDataStore::hasOldSettingsFile() const
+{
+	return exists("/lfs/settings");
+}
+
 /* ── Identity ──────────────────────────────────────────────────────── */
 
 bool ZephyrDataStore::loadMainIdentity(mesh::LocalIdentity &identity)
@@ -388,6 +463,11 @@ bool ZephyrDataStore::saveMainIdentity(const mesh::LocalIdentity &identity)
 
 void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 {
+	/* Save caller's defaults — restored if the file contains invalid radio
+	 * params (e.g. an Arduino MeshCore new_prefs whose layout diverges from
+	 * ZephCore at the freq/sf/bw offsets due to the inserted lat/lon fields). */
+	NodePrefs saved_defaults = prefs;
+
 	bool prefs_exists = exists(PREFS_FILE);
 	if (!prefs_exists) {
 		LOG_DBG("loadPrefs: no prefs file found, persisting defaults");
@@ -428,6 +508,24 @@ void ZephyrDataStore::loadPrefs(NodePrefs &prefs)
 	prefs.manual_add_contacts = buf[off++];
 	memcpy(&prefs.bw, &buf[off], sizeof(float));
 	off += 4;
+
+	/* Sanity-check core radio params before consuming the rest of the file.
+	 * An Arduino MeshCore new_prefs is layout-incompatible: ZephCore inserts
+	 * node_lat (8) + node_lon (8) after node_name, shifting freq/sf/bw by
+	 * +16 bytes.  The misread values are freq≈0, sf≤1, bw=garbage — all
+	 * outside the physical RF ranges below.  Revert to the caller's defaults
+	 * so the radio starts on the correct channel and the user can pair via
+	 * BLE and reconfigure. */
+	if (prefs.freq < 300.0f || prefs.freq > 960.0f ||
+	    prefs.sf < 5 || prefs.sf > 12 ||
+	    prefs.bw < 6.0f || prefs.bw > 510.0f) {
+		LOG_WRN("loadPrefs: radio params out of range "
+			"(freq=%.1f sf=%d bw=%.1f) — ignoring prefs (incompatible format?)",
+			(double)prefs.freq, (int)prefs.sf, (double)prefs.bw);
+		prefs = saved_defaults;
+		return;
+	}
+
 	prefs.tx_power_dbm = buf[off++];
 	prefs.telemetry_mode_base = buf[off++];
 	prefs.telemetry_mode_loc = buf[off++];

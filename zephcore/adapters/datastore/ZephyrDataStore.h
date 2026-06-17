@@ -49,6 +49,14 @@ public:
 	bool hasExternalStorage() const { return _has_ext_fs; }
 	uint32_t getExternalStorageKb() const;
 
+	/* First-boot migration helpers — see formatNVSOnly() in .cpp */
+	bool hasInitMarker() const;
+	void writeInitMarker();
+	void formatNVSOnly();
+	bool hasPrefs() const;
+	bool prefsLookLikeArduino() const;
+	bool hasOldSettingsFile() const;
+
 	static bool mount();
 	static void unmount();
 	static const char *mountPoint() { return MNT_POINT; }
