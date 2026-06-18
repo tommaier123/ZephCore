@@ -314,7 +314,24 @@ void ZephyrDataStore::checkAdvBlobFile()
 bool ZephyrDataStore::formatFileSystem()
 {
 	LOG_INF("formatFileSystem: starting...");
-	unmount();
+
+	/* Properly unmount from Zephyr's VFS before erasing flash.
+	 * The old unmount() only cleared flags — Zephyr still held /lfs mounted,
+	 * so flash_area_flatten silently destroyed the on-flash superblock while
+	 * LittleFS considered itself active.  Every subsequent file op then hit
+	 * the erased blocks and logged "Corrupted dir pair at {0x0, 0x1}".
+	 * FS_FSTAB_DECLARE_ENTRY exposes the non-static mount struct generated
+	 * from the DTS fstab; fs_mount() on a blank partition auto-formats
+	 * (littlefs_fs.c: lfs_mount fail → lfs_format → lfs_mount). */
+	FS_FSTAB_DECLARE_ENTRY(DT_NODELABEL(lfs));
+	fs_unmount(&FS_FSTAB_ENTRY(DT_NODELABEL(lfs)));
+	lfs_mounted = false;
+
+#if DT_NODE_EXISTS(DT_NODELABEL(qspi_lfs))
+	FS_FSTAB_DECLARE_ENTRY(DT_NODELABEL(qspi_lfs));
+	fs_unmount(&FS_FSTAB_ENTRY(DT_NODELABEL(qspi_lfs)));
+#endif
+	ext_lfs_mounted = false;
 
 	const struct flash_area *fap;
 	int rc;
@@ -347,7 +364,12 @@ bool ZephyrDataStore::formatFileSystem()
 	}
 #endif
 
-	bool mounted = mount();
+	/* Remount: littlefs_mount() auto-formats on blank flash, then mounts. */
+	rc = fs_mount(&FS_FSTAB_ENTRY(DT_NODELABEL(lfs)));
+	bool mounted = (rc == 0);
+	if (mounted) {
+		lfs_mounted = true;
+	}
 	LOG_INF("formatFileSystem: mount() returned %d", mounted ? 1 : 0);
 	return mounted;
 }
