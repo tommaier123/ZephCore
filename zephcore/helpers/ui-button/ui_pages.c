@@ -68,9 +68,12 @@ LOG_MODULE_REGISTER(ui_pages, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
 #define UI_COLOR_ERROR      MC_COLOR_RED
 #define UI_COLOR_DIM        0x4208
 #define UI_COLOR_DISABLED   MC_COLOR_GRAY
+#define UI_COLOR_TX         MC_COLOR_ORANGE
+#define UI_COLOR_RX         UI_COLOR_ACTIVE
 
 #define COLOR_FONT_W 6
 #define COLOR_FONT_H 8
+#define ACTIVITY_GRAPH_SAMPLES 16
 
 /* Vertically center `total` rows of text within the content area and
  * return the y pixel position for row `idx` (0-based).  This replaces
@@ -91,6 +94,14 @@ static inline int centered_row(int idx, int total)
 
 /* ========== Global State ========== */
 static struct ui_state state;
+
+static uint8_t activity_rx[ACTIVITY_GRAPH_SAMPLES];
+static uint8_t activity_tx[ACTIVITY_GRAPH_SAMPLES];
+static uint8_t activity_head;
+static bool activity_initialized;
+static uint32_t activity_last_rx;
+static uint32_t activity_last_tx;
+static uint32_t activity_last_sample_ms;
 
 /* ========== Active Pages (role-dependent) ========== */
 /* Repeater: minimal pages — status, radio, shutdown.
@@ -363,12 +374,149 @@ static void fmt_compact_count(char *buf, size_t len, uint32_t value)
 	}
 }
 
+static bool use_compact_color_home(void)
+{
+	return mc_display_has_color() && DISP_W <= 180 && DISP_H <= 100;
+}
+
+static uint8_t clamp_activity_delta(uint32_t delta)
+{
+	return (delta > 15U) ? 15U : (uint8_t)delta;
+}
+
+static void sample_activity_graph(void)
+{
+	uint32_t now = k_uptime_get_32();
+	uint32_t rx = state.lora_packets_rx;
+	uint32_t tx = state.lora_packets_tx;
+	uint32_t rx_delta = 0;
+	uint32_t tx_delta = 0;
+
+	if (!activity_initialized) {
+		activity_last_rx = rx;
+		activity_last_tx = tx;
+		activity_last_sample_ms = now;
+		activity_initialized = true;
+		return;
+	}
+
+	if (rx >= activity_last_rx) {
+		rx_delta = rx - activity_last_rx;
+	}
+	if (tx >= activity_last_tx) {
+		tx_delta = tx - activity_last_tx;
+	}
+
+	/* Age the graph slowly during quiet periods, but do not shift it on
+	 * every incidental repaint. Counter wrap/reset simply records zero. */
+	if (rx_delta == 0 && tx_delta == 0 &&
+	    (now - activity_last_sample_ms) < 5000U) {
+		return;
+	}
+
+	activity_last_rx = rx;
+	activity_last_tx = tx;
+	activity_last_sample_ms = now;
+	activity_head = (activity_head + 1U) % ACTIVITY_GRAPH_SAMPLES;
+	activity_rx[activity_head] = clamp_activity_delta(rx_delta);
+	activity_tx[activity_head] = clamp_activity_delta(tx_delta);
+}
+
+static void draw_activity_graph(int x, int y, int w, int h)
+{
+	uint8_t max_v = 0;
+	int mid = y + h / 2;
+	int col_w = w / ACTIVITY_GRAPH_SAMPLES;
+
+	if (col_w < 1) {
+		col_w = 1;
+	}
+
+	sample_activity_graph();
+
+	mc_display_color_fill_rect(x, y, w, h, MC_COLOR_BLACK);
+	mc_display_color_fill_rect(x, mid, w, 1, UI_COLOR_DIM);
+
+	for (int i = 0; i < ACTIVITY_GRAPH_SAMPLES; i++) {
+		uint8_t idx = (uint8_t)((activity_head + 1U + i) %
+					ACTIVITY_GRAPH_SAMPLES);
+
+		if (activity_rx[idx] > max_v) {
+			max_v = activity_rx[idx];
+		}
+		if (activity_tx[idx] > max_v) {
+			max_v = activity_tx[idx];
+		}
+	}
+	if (max_v == 0) {
+		mc_display_color_text(x + w - 30, y + 1, "RX", UI_COLOR_RX);
+		mc_display_color_text(x + w - 14, y + 1, "TX", UI_COLOR_TX);
+		return;
+	}
+
+	for (int i = 0; i < ACTIVITY_GRAPH_SAMPLES; i++) {
+		uint8_t idx = (uint8_t)((activity_head + 1U + i) %
+					ACTIVITY_GRAPH_SAMPLES);
+		int bx = x + i * col_w;
+		int draw_w = (col_w > 1) ? col_w - 1 : 1;
+		int tx_h = ((h / 2 - 1) * activity_tx[idx]) / max_v;
+		int rx_h = ((h / 2 - 1) * activity_rx[idx]) / max_v;
+
+		if (tx_h > 0) {
+			mc_display_color_fill_rect(bx, mid - tx_h, draw_w, tx_h,
+						   UI_COLOR_TX);
+		}
+		if (rx_h > 0) {
+			mc_display_color_fill_rect(bx, mid + 1, draw_w, rx_h,
+						   UI_COLOR_RX);
+		}
+	}
+
+	mc_display_color_text(x + w - 30, y + 1, "RX", UI_COLOR_RX);
+	mc_display_color_text(x + w - 14, y + 1, "TX", UI_COLOR_TX);
+}
+
 /* ========== Page Renderers ========== */
 
 static void render_messages(void)
 {
 	/* 3 centered rows: msg count, BLE status, offgrid status */
 	char buf[24];
+
+	if (use_compact_color_home()) {
+		int y = CONTENT_Y;
+		uint16_t ble_color = state.ble_connected ? UI_COLOR_OK : UI_COLOR_WARN;
+		const char *ble = state.ble_connected ? "BLE OK" : "BLE ADV";
+		int graph_h = 16;
+		int graph_y = DISP_H - graph_h - 2;
+
+		draw_badge(0, y, ble, ble_color);
+		draw_badge(DISP_W - color_text_width(state.offgrid_enabled ? "GRID" : "LOCAL") - 4,
+			   y, state.offgrid_enabled ? "GRID" : "LOCAL",
+			   state.offgrid_enabled ? UI_COLOR_ACTIVE : UI_COLOR_DISABLED);
+		y += LINE_H + 2;
+
+		mc_display_color_text(0, y, "MESSAGES", UI_COLOR_LABEL);
+		snprintf(buf, sizeof(buf), "%u", state.msg_count);
+		mc_display_color_text(DISP_W - color_text_width(buf), y, buf,
+				      state.msg_count ? UI_COLOR_WARN : UI_COLOR_VALUE);
+		y += LINE_H;
+
+		if (state.ble_connected) {
+			draw_centered_color(y, "Connected", UI_COLOR_OK);
+		} else {
+			mc_display_color_text(34, y, "Waiting for app", UI_COLOR_WARN);
+		}
+		y += LINE_H;
+
+		snprintf(buf, sizeof(buf), "Offgrid %s",
+			 state.offgrid_enabled ? "on" : "off");
+		draw_centered_color(y, buf,
+				    state.offgrid_enabled ? UI_COLOR_ACTIVE
+							  : UI_COLOR_DISABLED);
+		draw_activity_graph(2, graph_y, DISP_W - 4, graph_h);
+		return;
+	}
 
 	if (mc_display_has_color()) {
 		int y = CONTENT_Y;
