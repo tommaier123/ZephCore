@@ -303,7 +303,7 @@ bool CompanionMesh::onContactPathRecv(ContactInfo &from, uint8_t *in_path, uint8
 		if (tag == _pending_discovery) {
 			_pending_discovery = 0;
 
-			if (in_path_len <= MAX_PATH_SIZE && out_path_len <= MAX_PATH_SIZE) {
+			if (mesh::Packet::isValidPathLen(in_path_len) && mesh::Packet::isValidPathLen(out_path_len)) {
 				uint8_t rsp[172];
 				int i = 0;
 				rsp[i++] = PUSH_CODE_PATH_DISCOVERY_RESP;
@@ -311,11 +311,9 @@ bool CompanionMesh::onContactPathRecv(ContactInfo &from, uint8_t *in_path, uint8
 				memcpy(&rsp[i], from.id.pub_key, 6);
 				i += 6;
 				rsp[i++] = out_path_len;
-				memcpy(&rsp[i], out_path, out_path_len);
-				i += out_path_len;
+				i += mesh::Packet::writePath(&rsp[i], out_path, MAX_PATH_SIZE, out_path_len);
 				rsp[i++] = in_path_len;
-				memcpy(&rsp[i], in_path, in_path_len);
-				i += in_path_len;
+				i += mesh::Packet::writePath(&rsp[i], in_path, MAX_PATH_SIZE, in_path_len);
 				sendPush(rsp[0], &rsp[1], i - 1);
 			} else {
 				LOG_WRN("onContactPathRecv: invalid path sizes: out=%d in=%d",
