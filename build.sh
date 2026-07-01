@@ -199,12 +199,17 @@ size = parse_cell(m.group(1))
 print(str(size // 1048576) + "MB")
                 ' "${ZEPHYR_DTS:-build/zephcore/zephyr/zephyr.dts}"
             )
+            # MCUboot/sysbuild boards: only the merged (MCUboot + signed app)
+            # image is bootable on a bare/existing chip at 0x0. The signed app
+            # alone requires MCUboot already present and must land at 0x20000 —
+            # publishing it standalone as a "plain .bin" bricks boards when
+            # flashed the same way as classic-ESP32's self-contained zephyr.bin
+            # (see GH #42). Don't ship it.
             python -m esptool --chip "$chip" merge-bin \
             --output firmware/"$board_clean_for_path"-companion-"$COMMIT_HASH"-merged.bin \
             --flash-mode dio --flash-freq 40m --flash-size "$FLASH_SIZE" \
             0x00000 build/mcuboot/zephyr/zephyr.bin \
             0x20000 build/zephcore/zephyr/zephyr.signed.bin
-            mv build/zephcore/zephyr/zephyr.signed.bin firmware/"$board_clean_for_path"-companion-"$COMMIT_HASH".bin
         fi
         
         if [[ $2 == "repeaters" ]]; then
@@ -242,12 +247,13 @@ size = parse_cell(m.group(1))
 print(str(size // 1048576) + "MB")
                 ' "${ZEPHYR_DTS:-build/zephcore/zephyr/zephyr.dts}"
             )
+            # See companion branch above — the signed app alone isn't bootable
+            # standalone, so only publish the merged image for these boards.
             python -m esptool --chip "$chip" merge-bin \
             --output firmware/"$board_clean_for_path"-repeater-"$COMMIT_HASH"-merged.bin \
             --flash-mode dio --flash-freq 40m --flash-size "$FLASH_SIZE" \
             0x00000 build/mcuboot/zephyr/zephyr.bin \
             0x20000 build/zephcore/zephyr/zephyr.signed.bin
-            mv build/zephcore/zephyr/zephyr.signed.bin firmware/"$board_clean_for_path"-repeater-"$COMMIT_HASH".bin
         fi
     done
 fi
