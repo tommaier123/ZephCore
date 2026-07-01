@@ -43,6 +43,7 @@ LOG_MODULE_REGISTER(zephcore_ui_actions, CONFIG_ZEPHCORE_UI_ACTIONS_LOG_LEVEL);
 #define UI_ACTION_WAKE_ON_MSG_SAVE  BIT(9)
 #define UI_ACTION_SCREEN_OFF_SAVE   BIT(10)
 #define UI_ACTION_PATH_HASH_MODE_SAVE BIT(11)
+#define UI_ACTION_GPS_DUTY_SAVE     BIT(12)
 
 /* Module-local pointers, set by init */
 static CompanionMesh *s_mesh;
@@ -68,6 +69,7 @@ static atomic_t pending_brightness;
 static atomic_t pending_wake_on_msg;
 static atomic_t pending_screen_off_secs;
 static atomic_t pending_path_hash_mode;
+static atomic_t pending_gps_duty_sec;
 
 extern "C" void ui_mesh_actions_init(struct k_event *mesh_events,
 				     uint32_t mesh_event_ui_action,
@@ -148,6 +150,17 @@ extern "C" void mesh_save_path_hash_mode(uint8_t mode)
 {
 	atomic_set(&pending_path_hash_mode, (atomic_val_t)mode);
 	atomic_or(&pending_ui_actions, UI_ACTION_PATH_HASH_MODE_SAVE);
+	k_event_post(s_mesh_events, s_mesh_event_ui_action);
+}
+
+extern "C" void mesh_save_gps_duty_sec(uint32_t sec)
+{
+	/* Apply immediately (lightweight, no flash) — same split as mesh_gps_set_enabled. */
+	gps_set_poll_interval_sec(sec);
+
+	/* Defer the flash write (savePrefs) to mesh thread */
+	atomic_set(&pending_gps_duty_sec, (atomic_val_t)sec);
+	atomic_or(&pending_ui_actions, UI_ACTION_GPS_DUTY_SAVE);
 	k_event_post(s_mesh_events, s_mesh_event_ui_action);
 }
 
@@ -286,6 +299,12 @@ extern "C" void mesh_handle_ui_actions(void)
 		if (mode > 2) mode = 2;  /* clamp to valid range (0-2 → 1-3 bytes) */
 		s_mesh->prefs.path_hash_mode = mode;
 		LOG_INF("path_hash_mode=%d (%d bytes per hop)", mode, mode + 1);
+		need_save = true;
+	}
+
+	if (actions & UI_ACTION_GPS_DUTY_SAVE) {
+		s_mesh->prefs.gps_interval = (uint32_t)atomic_get(&pending_gps_duty_sec);
+		LOG_INF("gps_interval=%u (button)", s_mesh->prefs.gps_interval);
 		need_save = true;
 	}
 

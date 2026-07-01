@@ -1491,6 +1491,16 @@ void gps_enable(bool enable)
 		gps_current_state = GPS_STATE_OFF;
 		consecutive_good_fixes = 0;
 
+		/* Zero the stale satellite count so a re-enable doesn't briefly
+		 * report a live fix (e.g. joystick UI showing "3D FIX") off old
+		 * data before any new NMEA sentence arrives. lat/lon/valid are
+		 * deliberately left alone — telemetry/UI "last known position"
+		 * reads (gps_get_position/gps_load_position) intentionally survive
+		 * an on/off toggle; only the live fix-quality indicator resets. */
+		k_mutex_lock(&gps_mutex, K_FOREVER);
+		current_pos.satellites = 0;
+		k_mutex_unlock(&gps_mutex);
+
 		/* Clear first-fix flags so the next enable gets a fresh long
 		 * first-acquisition window again — the user explicitly toggled GPS
 		 * expecting it to try hard for a fix. */
