@@ -935,7 +935,12 @@ uint32_t CompanionMesh::calcFloodTimeoutMillisFor(uint32_t pkt_airtime_millis) c
 
 uint32_t CompanionMesh::calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t path_len) const
 {
-	return 500 + (uint32_t)((pkt_airtime_millis * 6.0f + 250) * (path_len + 1));
+	/* path_len is the packed hash-size-encoded byte (top 2 bits = hash_size-1,
+	 * bottom 6 = hop count) — mask to the real hop count before scaling, or
+	 * any path learned at path_hash_mode>0 inflates this by up to ~17x
+	 * (e.g. a 3-hop path at 2-byte hashes encodes as 67, not 3). */
+	uint8_t path_hash_count = path_len & 63;
+	return 500 + (uint32_t)((pkt_airtime_millis * 6.0f + 250) * (path_hash_count + 1));
 }
 
 void CompanionMesh::onSendTimeout()
