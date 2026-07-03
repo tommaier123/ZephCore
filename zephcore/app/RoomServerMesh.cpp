@@ -19,8 +19,6 @@
 #include <adapters/sensors/SimpleLPP.h>
 #include <adapters/sensors/ZephyrEnvSensors.h>
 #include <adapters/gps/ZephyrGPSManager.h>
-#include <adapters/clock/ZephyrRTCDiscover.h>
-#include <helpers/time_sync.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -579,7 +577,7 @@ void RoomServerMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int send
             mesh::Utils::sha256((uint8_t*)&ack_hash, 4, data, 5 + strlen((char*)&data[5]),
                                client->id.pub_key, PUB_KEY_SIZE);
 
-            uint8_t temp[166];
+            uint8_t temp[5 + CLI_REMOTE_REPLY_SIZE];
             bool send_ack;
             if (flags == TXT_TYPE_CLI_DATA) {  // admin CLI over the air
                 if (client->isAdmin()) {
@@ -1117,57 +1115,31 @@ void RoomServerMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id
                                   uint32_t timestamp, const uint8_t* app_data,
                                   size_t app_data_len) {
     (void)app_data; (void)app_data_len;
-    /* Signature already verified by mesh::Mesh before this hook fires. */
+    /* Signature already verified by mesh::Mesh before this hook fires.
+     * Skip share rebroadcasts (transport codes {0,0}) — they replay stale
+     * stored adverts and would churn the original sender's tenure. */
+    if (packet->hasTransportCodes() &&
+        packet->transport_codes[0] == 0 && packet->transport_codes[1] == 0) {
+        return;
+    }
     _timesync.onAdvertHeard(id.pub_key, timestamp, packet->getPathHashCount(),
                             (uint32_t)(k_uptime_get() / 1000));
 }
 
 void RoomServerMesh::timeSyncTick() {
     if (!_prefs.meshtimesync) return;
+    if (!_timesync.runTick(*getRTCClock())) return;
 
-    uint32_t up = (uint32_t)(k_uptime_get() / 1000);
-    uint32_t now = getRTCClock()->getCurrentTime();
-    MeshTimeSync::Verdict v = _timesync.tick(now, up);
-    if (v.type != MeshTimeSync::VERDICT_STEP) return;
-
-    /* GPS gate: sense only while GPS owns the clock. */
-    if (gps_is_available() && gps_is_enabled()) {
-        LOG_INF("meshtimesync: step %+d s wanted, GPS gate active - not applied",
-                (int)v.delta);
-        return;
-    }
-    /* Forward-only role: post timestamps feed client sync_since ordering,
-     * so a backward step corrupts message sync. Report, never apply. */
-    if (v.delta < 0) {
-        _timesync.noteBackwardSkipped();
-        LOG_WRN("meshtimesync: backward step %+d s wanted - skipped (room server is forward-only)",
-                (int)v.delta);
-        return;
-    }
-    applyTimeSyncStep(v, now, up);
-}
-
-void RoomServerMesh::applyTimeSyncStep(const MeshTimeSync::Verdict& v, uint32_t now,
-                                       uint32_t uptime_secs) {
-    uint32_t new_time = (uint32_t)((int64_t)now + v.delta);
-    getRTCClock()->setCurrentTime(new_time);
-    zephcore_rtc_save(new_time);
-    time_sync_report(TIME_SYNC_MESH);
-
-    /* Wall-clock-anchored bookkeeping moves with the step (see RepeaterMesh). */
+    /* Step applied (forward-only enforced in runTick) — shift wall-clock-
+     * anchored bookkeeping with it. */
+    int64_t delta = _timesync.lastStepDelta();
     for (int i = 0; i < acl.getNumClients(); i++) {
         ClientInfo* c = acl.getClientByIdx(i);
         if (c->last_activity == 0) continue;
-        int64_t shifted = (int64_t)c->last_activity + v.delta;
+        int64_t shifted = (int64_t)c->last_activity + delta;
         c->last_activity = (shifted > 0) ? (uint32_t)shifted : 1;
     }
     login_fail_limiter.reset();
-
-    _timesync.noteStepApplied(v.delta, new_time, uptime_secs, v.bootstrap);
-    LOG_WRN("meshtimesync: stepped clock %+d s (%s, votes %u/%u) -> %u",
-            (int)v.delta, v.bootstrap ? "bootstrap" : "consensus",
-            (unsigned)v.consensus.votes_for, (unsigned)v.consensus.votes_against,
-            (unsigned)new_time);
 }
 
 bool RoomServerMesh::hasPendingWork() const {

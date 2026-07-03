@@ -12,8 +12,6 @@
 #include <adapters/sensors/SimpleLPP.h>
 #include <adapters/sensors/ZephyrEnvSensors.h>
 #include <adapters/gps/ZephyrGPSManager.h>
-#include <adapters/clock/ZephyrRTCDiscover.h>
-#include <helpers/time_sync.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -52,10 +50,14 @@ LOG_MODULE_REGISTER(zephcore_repeater, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
 
 #if IS_ENABLED(CONFIG_ZEPHCORE_REPEATER_UPLINK) && IS_ENABLED(CONFIG_MQTT_LIB)
 static RepeaterMesh *s_uplink_mesh;
+/* Runs on the WiFi thread; the mesh time-sync module is main-thread-only, so
+ * flag the trusted sync and let loop() arm suppression + drift envelope. */
+static atomic_t s_uplink_sntp_pending;
 static void uplink_time_sync_cb(uint32_t unix_ts)
 {
 	if (s_uplink_mesh) {
 		s_uplink_mesh->getRTCClock()->setCurrentTime(unix_ts);
+		atomic_set(&s_uplink_sntp_pending, 1);
 	}
 }
 #endif
@@ -713,9 +715,13 @@ void RepeaterMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, 
                                 const uint8_t* app_data, size_t app_data_len) {
     mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
 
-    /* Signature already verified by mesh::Mesh before this hook fires. */
-    _timesync.onAdvertHeard(id.pub_key, timestamp, packet->getPathHashCount(),
-                            (uint32_t)(k_uptime_get() / 1000));
+    /* Signature already verified by mesh::Mesh before this hook fires.
+     * Skip share rebroadcasts — they replay stale stored adverts and would
+     * churn the original sender's tenure. */
+    if (!isShare(packet)) {
+        _timesync.onAdvertHeard(id.pub_key, timestamp, packet->getPathHashCount(),
+                                (uint32_t)(k_uptime_get() / 1000));
+    }
 
     if (packet->getPathHashCount() == 0 && !isShare(packet)) {
         AdvertDataParser parser(app_data, app_data_len);
@@ -790,7 +796,7 @@ void RepeaterMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
                 }
             }
 
-            uint8_t temp[166];
+            uint8_t temp[5 + CLI_REMOTE_REPLY_SIZE];
             char* command = (char*)&data[5];
             char* reply = (char*)&temp[5];
             if (is_retry) {
@@ -1378,6 +1384,10 @@ void RepeaterMesh::loop() {
         publishUplinkStatus("online");
         _uplink_next_status_at = futureMillis(300000);
     }
+    if (atomic_cas(&s_uplink_sntp_pending, 1, 0)) {
+        /* SNTP set the clock (trusted) — arm suppression + drift envelope. */
+        _timesync.noteManualSync((uint32_t)(k_uptime_get() / 1000));
+    }
 #endif
 
     timeSyncTick();
@@ -1389,47 +1399,23 @@ void RepeaterMesh::loop() {
 
 void RepeaterMesh::timeSyncTick() {
     if (!_prefs.meshtimesync) return;
+    if (!_timesync.runTick(*getRTCClock())) return;
 
-    uint32_t up = (uint32_t)(k_uptime_get() / 1000);
-    uint32_t now = getRTCClock()->getCurrentTime();
-    MeshTimeSync::Verdict v = _timesync.tick(now, up);
-    if (v.type != MeshTimeSync::VERDICT_STEP) {
-        if (v.type == MeshTimeSync::VERDICT_ABSTAIN) {
-            LOG_DBG("meshtimesync: abstain (%s)", MeshTimeSync::reasonStr(v.reason));
-        }
-        return;
-    }
-    /* GPS gate: GPS sets the clock unconditionally — a wrong mesh step
-     * followed by a GPS step-back would poison our own advert high-water
-     * marks at peers. Sense only. */
-    if (gps_is_available() && gps_is_enabled()) {
-        LOG_INF("meshtimesync: step %+d s wanted, GPS gate active - not applied",
-                (int)v.delta);
-        return;
-    }
-    applyTimeSyncStep(v, now, up);
-}
-
-void RepeaterMesh::applyTimeSyncStep(const MeshTimeSync::Verdict& v, uint32_t now,
-                                     uint32_t uptime_secs) {
-    uint32_t new_time = (uint32_t)((int64_t)now + v.delta);
-    getRTCClock()->setCurrentTime(new_time);
-    zephcore_rtc_save(new_time);
-    time_sync_report(TIME_SYNC_MESH);
-
-    /* Wall-clock-anchored bookkeeping must move with the step, or a backward
-     * step underflows the unsigned "seconds ago" math. 0 = unset sentinel. */
+    /* Step applied — wall-clock-anchored bookkeeping must move with it, or a
+     * backward step underflows the unsigned "seconds ago" math. 0 = unset
+     * sentinel. */
+    int64_t delta = _timesync.lastStepDelta();
 #if MAX_NEIGHBOURS > 0
     for (int i = 0; i < MAX_NEIGHBOURS; i++) {
         if (neighbours[i].heard_timestamp == 0) continue;
-        int64_t shifted = (int64_t)neighbours[i].heard_timestamp + v.delta;
+        int64_t shifted = (int64_t)neighbours[i].heard_timestamp + delta;
         neighbours[i].heard_timestamp = (shifted > 0) ? (uint32_t)shifted : 1;
     }
 #endif
     for (int i = 0; i < acl.getNumClients(); i++) {
         ClientInfo* c = acl.getClientByIdx(i);
         if (c->last_activity == 0) continue;
-        int64_t shifted = (int64_t)c->last_activity + v.delta;
+        int64_t shifted = (int64_t)c->last_activity + delta;
         c->last_activity = (shifted > 0) ? (uint32_t)shifted : 1;
     }
     /* A backward step would otherwise wedge these shut until wall-clock
@@ -1437,12 +1423,6 @@ void RepeaterMesh::applyTimeSyncStep(const MeshTimeSync::Verdict& v, uint32_t no
     discover_limiter.reset();
     anon_limiter.reset();
     login_fail_limiter.reset();
-
-    _timesync.noteStepApplied(v.delta, new_time, uptime_secs, v.bootstrap);
-    LOG_WRN("meshtimesync: stepped clock %+d s (%s, votes %u/%u) -> %u",
-            (int)v.delta, v.bootstrap ? "bootstrap" : "consensus",
-            (unsigned)v.consensus.votes_for, (unsigned)v.consensus.votes_against,
-            (unsigned)new_time);
 }
 
 bool RepeaterMesh::hasPendingWork() const {

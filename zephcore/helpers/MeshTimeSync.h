@@ -2,21 +2,25 @@
  * SPDX-License-Identifier: MIT
  * MeshTimeSync - mesh clock consensus from Ed25519-signed advert timestamps.
  *
- * Role-agnostic estimator: owns no clock. Each role feeds it signature-
- * verified adverts (onAdvertHeard), calls tick() from its loop, and applies
- * STEP verdicts under its own step policy (repeater/observer: bidirectional;
- * room server/companion: forward-only; GPS-synced boards: sense only).
- * ZephCore-only divergence from Arduino MeshCore — design rationale in
- * ARCHITECTURE.md, user-facing doc in MESHTIMESYNC.md.
+ * Role-agnostic estimator plus shared step policy. Each role feeds it
+ * signature-verified adverts (onAdvertHeard) and calls runTick() from its
+ * loop; runTick applies the shared policy (GPS fix-freshness gate,
+ * forward-only roles skip backward steps, ±1 h cap, 6 h rate limit) and
+ * steps the given clock. Role-specific bookkeeping (neighbor/ACL timestamp
+ * shifts, rate-limiter resets) happens in the role after runTick returns
+ * true. ZephCore-only divergence from Arduino MeshCore — design rationale
+ * in ARCHITECTURE.md, user-facing doc in MESHTIMESYNC.md.
  *
  * All policy timers anchor on uptime, never wall clock, so the very steps
- * they govern cannot distort them.
+ * they govern cannot distort them. Main-thread-only, like the mesh classes
+ * that own it.
  */
 
 #pragma once
 
 #include <stdint.h>
 #include <stddef.h>
+#include <mesh/RTC.h>
 
 #ifdef CONFIG_ZEPHCORE_TIMESYNC_TABLE_SIZE
   #define MESHTIMESYNC_TABLE_SIZE  CONFIG_ZEPHCORE_TIMESYNC_TABLE_SIZE
@@ -56,6 +60,12 @@ public:
 	static constexpr int64_t  PEDIGREE_PPM             = 300;
 	static constexpr int64_t  PEDIGREE_BASE_SECS       = 10 * 60;
 	static constexpr uint8_t  BOOTSTRAP_QUORUM         = 3;
+	/* GPS gate: a validated fix younger than this means GPS owns the clock
+	 * (it re-syncs and would step-back a wrong mesh step, poisoning our
+	 * advert high-water marks at peers). Covers the repeater's 48 h GPS
+	 * duty cycle with margin; a unit whose GPS cannot get a fix (indoors,
+	 * dead antenna) becomes mesh-correctable after this window. */
+	static constexpr uint32_t GPS_FIX_FRESH_SECS       = 72 * 3600;
 
 	/* 8-byte prefix is a security floor, not a tuning knob: it is the
 	 * sender's identity for tenure/votes while signatures verify the full
@@ -104,78 +114,74 @@ public:
 		Consensus consensus;
 	};
 
-	explicit MeshTimeSync(uint32_t build_epoch = 0) { reset(build_epoch); }
+	explicit MeshTimeSync(uint32_t build_epoch = 0, bool forward_only = false)
+	{
+		reset(build_epoch, forward_only);
+	}
 
-	void reset(uint32_t build_epoch);
+	void reset(uint32_t build_epoch, bool forward_only);
 
 	/* Feed one signature-verified advert. hops = flood path length (0 = heard
-	 * direct). Samples beyond HOP_CAP are dropped. */
+	 * direct). Samples beyond HOP_CAP are dropped. Callers must not feed
+	 * share rebroadcasts (transport codes {0,0}) — those replay stale stored
+	 * adverts and would churn the sender's tenure. */
 	void onAdvertHeard(const uint8_t *pubkey, uint32_t advert_ts, uint8_t hops,
 	                   uint32_t uptime_secs);
 
-	/* Paced evaluation — returns VERDICT_NONE/REASON_NONE unless
-	 * EVAL_INTERVAL_SECS elapsed since the last real evaluation. The caller
-	 * applies STEP verdicts under its role policy and reports the outcome
-	 * via noteStepApplied() (the step rate limit counts applied steps only). */
-	Verdict tick(uint32_t local_time, uint32_t uptime_secs);
+	/* Cheap pre-check: would onAdvertHeard even consider this sample?
+	 * Lets callers skip the Ed25519 verify for per-sender duplicates
+	 * (observers hear every flood copy with no dedup of their own). */
+	bool wouldAccept(const uint8_t *pubkey, uint32_t advert_ts) const;
 
-	/* Unpaced consensus computation (CLI dry-run view). */
-	Consensus computeConsensus(uint32_t local_time, uint32_t uptime_secs,
-	                           bool bootstrap) const;
+	/* Paced policy run — call from the role's loop with its RTC clock.
+	 * Evaluates at most every EVAL_INTERVAL_SECS; applies the shared step
+	 * policy and steps the clock (incl. hardware-RTC save + UI time-source
+	 * report). Returns true when a step was applied — the role then shifts
+	 * its wall-clock-anchored bookkeeping by lastStepDelta(). The caller
+	 * gates on its own enable pref. */
+	bool runTick(mesh::RTCClock &rtc);
 
-	/* Unpaced full policy evaluation (no counter/pacing side effects) —
-	 * what tick() would decide right now. Used by the CLI dry-run. */
-	Verdict evaluateNow(uint32_t local_time, uint32_t uptime_secs) const;
-
-	bool isBootstrap(uint32_t local_time) const { return local_time < _build_epoch; }
-
-	/* Manual clock set (CLI time/clock sync, app time set): arms the 7-day
-	 * suppression window AND drift-envelope pedigree. Suppression gates
-	 * bootstrap too. */
+	/* Manual clock set (CLI time/clock sync, app time set, SNTP): arms the
+	 * 7-day suppression window AND drift-envelope pedigree. Suppression
+	 * gates bootstrap too. */
 	void noteManualSync(uint32_t uptime_secs);
-	/* GPS time sync: arms pedigree only (stepping is gated off by the role
-	 * whenever GPS is available and enabled, so no suppression needed). */
+	/* GPS time sync: arms pedigree only (stepping is gated by GPS fix
+	 * freshness, so no suppression needed). */
 	void noteGPSSync(uint32_t uptime_secs);
-	/* Report an applied step (rate-limit anchor + counters). local_time is
-	 * the wall clock AFTER the step (display only). */
-	void noteStepApplied(int64_t delta, uint32_t local_time, uint32_t uptime_secs,
-	                     bool bootstrap);
-	/* Forward-only roles report a refused backward verdict. */
-	void noteBackwardSkipped() { _backward_skips++; }
 
-	bool isSuppressed(uint32_t uptime_secs) const;
-	uint32_t suppressRemaining(uint32_t uptime_secs) const;
-
-	/* Table access for the CLI evidence dump. */
-	static int tableSize() { return MESHTIMESYNC_TABLE_SIZE; }
-	const Slot &slotAt(int i) const { return _slots[i]; }
-	bool slotEligible(const Slot &s, uint32_t uptime_secs) const;
-	int64_t slotSkew(const Slot &s, uint32_t local_time, uint32_t uptime_secs) const;
-
-	/* Counters for CLI/stats. */
-	uint32_t evalCount() const { return _evals; }
-	uint32_t abstainCount() const { return _abstains; }
-	uint32_t stepCount() const { return _steps; }
-	uint32_t bootstrapStepCount() const { return _bootstrap_steps; }
-	uint32_t backwardSkipCount() const { return _backward_skips; }
+	/* Delta of the most recent applied step (for role bookkeeping shifts). */
 	int64_t lastStepDelta() const { return _last_step_delta; }
-	uint32_t lastStepWall() const { return _last_step_wall; }
-	bool hasStepped() const { return _stepped_once; }
 
 	/* Compact status + evidence-table formatter shared by all role CLIs.
 	 * Writes at most `cap` bytes (NUL-terminated), summary first, then as
-	 * many per-sender entries as fit. */
+	 * many per-sender entries as fit. Annotates verdicts the step policy
+	 * would refuse ("gps-gated", "skipped: forward-only"). */
 	int formatStatus(char *out, size_t cap, uint32_t local_time,
 	                 uint32_t uptime_secs, bool enabled) const;
 
-	static const char *reasonStr(Reason r);
-
 private:
+	bool isBootstrap(uint32_t local_time) const { return local_time < _build_epoch; }
+
 	Slot *findSlot(const uint8_t *prefix);
 	bool slotTenured(const Slot &s, uint32_t uptime_secs) const;
+	bool slotEligible(const Slot &s, uint32_t uptime_secs) const;
+	int64_t slotSkew(const Slot &s, uint32_t local_time, uint32_t uptime_secs) const;
+
+	Consensus computeConsensus(uint32_t local_time, uint32_t uptime_secs,
+	                           bool bootstrap) const;
+	/* Unpaced full policy evaluation (no counter/pacing side effects). */
+	Verdict evaluateNow(uint32_t local_time, uint32_t uptime_secs) const;
+	/* Paced evaluation — VERDICT_NONE/REASON_NONE between evaluations. */
+	Verdict tick(uint32_t local_time, uint32_t uptime_secs);
+
+	void noteStepApplied(int64_t delta, uint32_t uptime_secs, bool bootstrap);
+	bool isSuppressed(uint32_t uptime_secs) const;
+	uint32_t suppressRemaining(uint32_t uptime_secs) const;
+	static const char *reasonStr(Reason r);
 
 	Slot _slots[MESHTIMESYNC_TABLE_SIZE];
 	uint32_t _build_epoch;
+	bool _forward_only;
 
 	/* Policy state — uptime-anchored (see header comment). */
 	uint32_t _next_eval_uptime;
@@ -186,8 +192,7 @@ private:
 	uint32_t _last_step_uptime;
 	bool _stepped_once;
 
-	/* Counters. */
+	/* Counters (shown by formatStatus). */
 	uint32_t _evals, _abstains, _steps, _bootstrap_steps, _backward_skips;
 	int64_t _last_step_delta;
-	uint32_t _last_step_wall;
 };

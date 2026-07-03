@@ -35,7 +35,10 @@ worth watching that dry-run output for a day before (and after) enabling.
 
 ## What it will NOT do
 
-- It never overrides GPS time. Nodes with GPS enabled only observe.
+- It never fights GPS: a node whose GPS has delivered a real fix in the
+  last 72 hours only observes. If GPS is on but cannot get a fix (indoors,
+  dead antenna), mesh correction takes over after 72 hours — until the
+  next real fix.
 - It never overrides a recent manual `time <epoch>` or `clock sync` — any
   manual set protects the clock from automatic changes for 7 days.
 - It never steps more than 1 hour at a time, and at most one step per 6 hours.
@@ -81,4 +84,4 @@ adverts take tens of minutes to accumulate after a reboot, so an operator
 syncing right after login always wins.
 
 For the design details (consensus algorithm, security model, why the limits
-are what they are), see [ARCHITECTURE.md](ARCHITECTURE.md) section 4.9.
+are what they are), see [ARCHITECTURE.md](zephcore/ARCHITECTURE.md) section 4.9.

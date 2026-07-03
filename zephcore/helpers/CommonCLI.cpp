@@ -551,10 +551,11 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, const char* command, ch
             if (ts == nullptr) {
                 strcpy(reply, "not available");
             } else {
-                /* Remote replies ride in a ~160-byte packet buffer; only the
-                 * local USB CLI (sender_timestamp == 0) gets the full evidence
-                 * table. */
-                size_t cap = (sender_timestamp == 0) ? CLI_REPLY_SIZE : 158;
+                /* Only the local USB CLI (sender_timestamp == 0) gets the
+                 * full evidence table; remote replies are truncated to the
+                 * packet buffer. */
+                size_t cap = (sender_timestamp == 0) ? CLI_REPLY_SIZE
+                                                     : CLI_REMOTE_REPLY_SIZE;
                 ts->formatStatus(reply, cap, getRTCClock()->getCurrentTime(),
                                  (uint32_t)(k_uptime_get() / 1000),
                                  _prefs->meshtimesync != 0);

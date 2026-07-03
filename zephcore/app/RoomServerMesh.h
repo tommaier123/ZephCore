@@ -95,12 +95,13 @@ class RoomServerMesh : public mesh::Mesh, public CommonCLICallbacks {
     uint8_t pending_sf;
     uint8_t pending_cr;
     int matching_peer_indexes[MAX_CLIENTS];
-    MeshTimeSync _timesync{FIRMWARE_BUILD_EPOCH};
+    /* Forward-only: post timestamps feed client sync_since ordering, so a
+     * backward step would corrupt message sync. */
+    MeshTimeSync _timesync{FIRMWARE_BUILD_EPOCH, true};
 
     int handleRequest(ClientInfo* sender, uint32_t sender_timestamp, uint8_t* payload, size_t payload_len);
     mesh::Packet* createSelfAdvert();
     void timeSyncTick();
-    void applyTimeSyncStep(const MeshTimeSync::Verdict& v, uint32_t now, uint32_t uptime_secs);
 
     /* Room server: shared-post buffer + push-to-client sync */
     void addPost(ClientInfo* client, const char* postData);
@@ -197,8 +198,7 @@ public:
     void saveIdentity(const mesh::LocalIdentity& new_id) override;
     void clearStats() override;
 
-    /* Mesh time sync (forward-only: post timestamps feed client sync_since
-     * ordering, so a backward step would corrupt message sync) */
+    /* Mesh time sync */
     MeshTimeSync* getMeshTimeSync() override { return &_timesync; }
     void noteGPSTimeSync() { _timesync.noteGPSSync((uint32_t)(k_uptime_get() / 1000)); }
 

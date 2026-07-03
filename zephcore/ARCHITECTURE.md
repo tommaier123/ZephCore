@@ -303,7 +303,7 @@ ZephCore-only divergence from Arduino MeshCore (like the Adaptive Contention Win
 **Consensus**: Marzullo interval intersection over eligible votes, each `[skew − r, skew + r]` with `r = 150 s + 15 s × hop` (the 150 s base covers the real fleet's good-clock scatter, not just RF delay). No absolute outlier thresholds against the local clock — clustering does the rejection, so an epoch-reset clock still finds the true cluster. Stepping requires `CONFIG_ZEPHCORE_TIMESYNC_QUORUM` (default 6, floor 3, build-time security knob) eligible senders AND a strict majority inside the intersection; otherwise abstain.
 
 **Correction policy** (priority: GPS > manual set > mesh consensus):
-- GPS gate: boards with GPS available + enabled never step (sensing continues).
+- GPS gate: nodes whose GPS delivered a validated fix within **72 h** never step (covers the repeater's 48 h GPS duty cycle with margin). Only a real fix makes the mesh yield — a GPS that is enabled but cannot fix (indoors, dead antenna) stops gating after the window, so those units stay mesh-correctable. Sensing always continues; the dry-run marks refused steps `(gps-gated)`.
 - Manual set (`time`, `clock sync`, app time set) arms a **7-day suppression** of all stepping, bootstrap included, plus drift-envelope pedigree.
 - Step trigger 10 min, dead band 5 min, step capped **±1 h**, one step per **6 h**, logged loudly. Production contains coherent wrong-time islands (+28 h × 63 repeaters at analysis time); the cap bounds capture drag to 4 h/day.
 - **Drift-envelope gate**: with a trusted sync + continuous uptime since (pedigree, RAM-only), corrections beyond `elapsed × 300 ppm + 10 min` are physically impossible for a crystal — refused regardless of quorum.
@@ -317,7 +317,7 @@ ZephCore-only divergence from Arduino MeshCore (like the Adaptive Contention Win
 | Room server | forward-only | post timestamps feed client `sync_since` ordering |
 | Companion | forward-only | own clock stamps outgoing DMs; peers hold per-sender replay high-water marks |
 
-**Step application** (repeater reference, `applyTimeSyncStep`): set clock, one `zephcore_rtc_save` per step (never per evaluation), shift neighbor `heard_timestamp`s and ACL `last_activity` by the delta (unsigned "seconds ago" math), reset the login/anon/discover rate limiters.
+**Step application**: the shared policy (GPS gate, forward-only skip, uint32-overflow guard, set clock, one `zephcore_rtc_save` per step — never per evaluation) lives in `MeshTimeSync::runTick()`; when it returns true, the role shifts its wall-clock-anchored bookkeeping by `lastStepDelta()` — repeater: neighbor `heard_timestamp`s, ACL `last_activity`, login/anon/discover rate-limiter resets; room server: ACL + login limiter.
 
 All policy timers (6 h rate limit, 7-day suppression, tenure, sample age) anchor on **uptime, never wall clock** — otherwise the very steps they govern would distort them.
 

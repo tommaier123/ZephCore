@@ -353,43 +353,9 @@ void CompanionMesh::onAdvertTimeSample(const mesh::Identity &id, uint32_t timest
 void CompanionMesh::timeSyncTick()
 {
 	if (!prefs.meshtimesync) return;
-
-	uint32_t up = (uint32_t)(k_uptime_get() / 1000);
-	uint32_t now = getRTCClock()->getCurrentTime();
-	MeshTimeSync::Verdict v = _timesync.tick(now, up);
-	if (v.type != MeshTimeSync::VERDICT_STEP) return;
-
-	/* GPS gate: sense only while GPS owns the clock. */
-	if (gps_is_available() && gps_is_enabled()) {
-		LOG_INF("meshtimesync: step %+d s wanted, GPS gate active - not applied",
-			(int)v.delta);
-		return;
-	}
-	/* Forward-only role: our clock stamps outgoing DMs and peers hold
-	 * per-sender replay high-water marks — a backward step gets our
-	 * messages dropped as replays. Report, never apply. */
-	if (v.delta < 0) {
-		_timesync.noteBackwardSkipped();
-		LOG_WRN("meshtimesync: backward step %+d s wanted - skipped (companion is forward-only)",
-			(int)v.delta);
-		return;
-	}
-	applyTimeSyncStep(v, now, up);
-}
-
-void CompanionMesh::applyTimeSyncStep(const MeshTimeSync::Verdict &v, uint32_t now,
-				      uint32_t uptime_secs)
-{
-	uint32_t new_time = (uint32_t)((int64_t)now + v.delta);
-	getRTCClock()->setCurrentTime(new_time);
-	zephcore_rtc_save(new_time);
-	time_sync_report(TIME_SYNC_MESH);
-
-	_timesync.noteStepApplied(v.delta, new_time, uptime_secs, v.bootstrap);
-	LOG_WRN("meshtimesync: stepped clock %+d s (%s, votes %u/%u) -> %u",
-		(int)v.delta, v.bootstrap ? "bootstrap" : "consensus",
-		(unsigned)v.consensus.votes_for, (unsigned)v.consensus.votes_against,
-		(unsigned)new_time);
+	/* Shared policy (GPS fix-freshness gate, forward-only) lives in
+	 * runTick; no companion-side bookkeeping needs shifting on a step. */
+	_timesync.runTick(*getRTCClock());
 }
 
 void CompanionMesh::onLoginSent(const ContactInfo &contact)

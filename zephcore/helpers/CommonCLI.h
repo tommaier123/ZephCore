@@ -17,6 +17,12 @@ class MeshTimeSync;
 /* CLI reply buffer size — callers must provide at least this many bytes */
 #define CLI_REPLY_SIZE 256
 
+/* Remote-admin replies ride in the caller's LoRa packet buffer:
+ * RepeaterMesh/RoomServerMesh onPeerDataRecv declare temp[5 + this] with the
+ * reply text at offset 5. Handlers that can exceed this must self-limit
+ * whenever sender_timestamp != 0 (0 marks the local USB CLI). */
+#define CLI_REMOTE_REPLY_SIZE 161
+
 /* Deferred reboot types */
 #define REBOOT_NONE       0
 #define REBOOT_NORMAL     1

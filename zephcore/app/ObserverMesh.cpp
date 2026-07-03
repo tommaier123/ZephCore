@@ -9,8 +9,6 @@
 #include <mesh/Utils.h>
 #include <mesh/LoRaConfig.h>
 #include <adapters/radio/LoRaRadioBase.h>
-#include <adapters/clock/ZephyrRTCDiscover.h>
-#include <adapters/gps/ZephyrGPSManager.h>
 #include <helpers/MeshcoreJson.h>
 
 #include <zephyr/logging/log.h>
@@ -230,6 +228,12 @@ void ObserverMesh::harvestTimeSample(Packet *pkt)
 	if (pkt->getPayloadType() != PAYLOAD_TYPE_ADVERT) return;
 	if (pkt->getPathHashCount() > MeshTimeSync::HOP_CAP) return;
 	if (pkt->payload_len < PUB_KEY_SIZE + 4 + SIGNATURE_SIZE) return;
+	/* Skip share rebroadcasts (transport codes {0,0}) — they replay stale
+	 * stored adverts and would churn the original sender's tenure. */
+	if (pkt->hasTransportCodes() &&
+	    pkt->transport_codes[0] == 0 && pkt->transport_codes[1] == 0) {
+		return;
+	}
 
 	int i = 0;
 	Identity id;
@@ -240,6 +244,10 @@ void ObserverMesh::harvestTimeSample(Packet *pkt)
 	i += 4;
 	const uint8_t *signature = &pkt->payload[i];
 	i += SIGNATURE_SIZE;
+
+	/* Observers have no dedup and hear every flood copy — skip the
+	 * expensive Ed25519 verify when the sample cannot update the table. */
+	if (!_timesync.wouldAccept(id.pub_key, timestamp)) return;
 
 	size_t app_data_len = pkt->payload_len - (size_t)i;
 	if (app_data_len > MAX_ADVERT_DATA_SIZE) app_data_len = MAX_ADVERT_DATA_SIZE;
@@ -259,38 +267,14 @@ void ObserverMesh::harvestTimeSample(Packet *pkt)
 void ObserverMesh::timeSyncTick()
 {
 	if (!_prefs.meshtimesync || !_rtc) return;
-
-	uint32_t up = (uint32_t)(k_uptime_get() / 1000);
-	uint32_t now = _rtc->getCurrentTime();
-	MeshTimeSync::Verdict v = _timesync.tick(now, up);
-	if (v.type != MeshTimeSync::VERDICT_STEP) return;
-
-	/* GPS gate: sense only while GPS owns the clock. */
-	if (gps_is_available() && gps_is_enabled()) {
-		LOG_INF("meshtimesync: step %+d s wanted, GPS gate active - not applied",
-			(int)v.delta);
-		return;
-	}
-	applyTimeSyncStep(v, now, up);
+	/* Shared policy (GPS fix-freshness gate) lives in runTick; no
+	 * observer-side bookkeeping needs shifting on a step. */
+	_timesync.runTick(*_rtc);
 }
 
 void ObserverMesh::noteTrustedTimeSync()
 {
 	_timesync.noteManualSync((uint32_t)(k_uptime_get() / 1000));
-}
-
-void ObserverMesh::applyTimeSyncStep(const MeshTimeSync::Verdict &v, uint32_t now,
-				     uint32_t uptime_secs)
-{
-	uint32_t new_time = (uint32_t)((int64_t)now + v.delta);
-	_rtc->setCurrentTime(new_time);
-	zephcore_rtc_save(new_time);
-
-	_timesync.noteStepApplied(v.delta, new_time, uptime_secs, v.bootstrap);
-	LOG_WRN("meshtimesync: stepped clock %+d s (%s, votes %u/%u) -> %u",
-		(int)v.delta, v.bootstrap ? "bootstrap" : "consensus",
-		(unsigned)v.consensus.votes_for, (unsigned)v.consensus.votes_against,
-		(unsigned)new_time);
 }
 
 /* ========== Serial CLI ========== */

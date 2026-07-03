@@ -6,13 +6,42 @@
 
 #include "MeshTimeSync.h"
 
+#include <adapters/gps/ZephyrGPSManager.h>
+#include <adapters/clock/ZephyrRTCDiscover.h>
+#include <helpers/time_sync.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 #include <stdio.h>
 #include <string.h>
 
-void MeshTimeSync::reset(uint32_t build_epoch)
+LOG_MODULE_REGISTER(zephcore_timesync, CONFIG_ZEPHCORE_MAIN_LOG_LEVEL);
+
+/* Clamp an int64 skew to a printable long (display only). */
+static long clampl(int64_t v)
+{
+	if (v > 2000000000LL) return 2000000000L;
+	if (v < -2000000000LL) return -2000000000L;
+	return (long)v;
+}
+
+/* GPS gate: only a validated fix younger than GPS_FIX_FRESH_SECS makes the
+ * mesh yield — a GPS that is enabled but cannot fix (indoors, dead antenna)
+ * stops gating after the window, so those units stay mesh-correctable. */
+static bool gps_gate_active(void)
+{
+	if (!gps_is_available() || !gps_is_enabled()) {
+		return false;
+	}
+	struct gps_state_info info;
+	gps_get_state_info(&info);
+	return info.last_fix_age_s < MeshTimeSync::GPS_FIX_FRESH_SECS;
+}
+
+void MeshTimeSync::reset(uint32_t build_epoch, bool forward_only)
 {
 	memset(_slots, 0, sizeof(_slots));
 	_build_epoch = build_epoch;
+	_forward_only = forward_only;
 	_next_eval_uptime = 0;
 	_suppress_uptime = 0;
 	_suppressed = false;
@@ -22,7 +51,6 @@ void MeshTimeSync::reset(uint32_t build_epoch)
 	_stepped_once = false;
 	_evals = _abstains = _steps = _bootstrap_steps = _backward_skips = 0;
 	_last_step_delta = 0;
-	_last_step_wall = 0;
 }
 
 MeshTimeSync::Slot *MeshTimeSync::findSlot(const uint8_t *prefix)
@@ -53,6 +81,17 @@ int64_t MeshTimeSync::slotSkew(const Slot &s, uint32_t local_time, uint32_t upti
 	 * with our wall clock. Uptime anchor keeps this valid across own steps. */
 	return (int64_t)s.advert_ts + (int64_t)(uptime_secs - s.arrival_uptime) -
 	       (int64_t)local_time;
+}
+
+bool MeshTimeSync::wouldAccept(const uint8_t *pubkey, uint32_t advert_ts) const
+{
+	for (int i = 0; i < MESHTIMESYNC_TABLE_SIZE; i++) {
+		const Slot &s = _slots[i];
+		if (s.used && memcmp(s.prefix, pubkey, sizeof(s.prefix)) == 0) {
+			return advert_ts > s.advert_ts;
+		}
+	}
+	return true;
 }
 
 void MeshTimeSync::onAdvertHeard(const uint8_t *pubkey, uint32_t advert_ts,
@@ -125,19 +164,22 @@ MeshTimeSync::Consensus MeshTimeSync::computeConsensus(uint32_t local_time,
 	Consensus c;
 	memset(&c, 0, sizeof(c));
 
-	/* Collect eligible votes. Bootstrap relaxes tenure: any sender with a
-	 * fresh sample may vote (the table is RAM-only, so after the reboot that
-	 * dead-ended the clock everything in it is freshly heard anyway). */
-	int64_t skews[MESHTIMESYNC_TABLE_SIZE];
-	int32_t radii[MESHTIMESYNC_TABLE_SIZE];
-	int n = 0;
+	/* Collect eligible votes directly as Marzullo interval endpoints.
+	 * Bootstrap relaxes tenure: any sender with a fresh sample may vote
+	 * (the table is RAM-only, so after the reboot that dead-ended the
+	 * clock everything in it is freshly heard anyway). */
+	int64_t val[2 * MESHTIMESYNC_TABLE_SIZE];
+	int8_t typ[2 * MESHTIMESYNC_TABLE_SIZE];  /* +1 = start, -1 = end */
+	int n = 0, m = 0;
 	for (int i = 0; i < MESHTIMESYNC_TABLE_SIZE; i++) {
 		const Slot &s = _slots[i];
 		if (!s.used) continue;
 		if ((uptime_secs - s.arrival_uptime) > MAX_SAMPLE_AGE_SECS) continue;
 		if (!bootstrap && !slotTenured(s, uptime_secs)) continue;
-		skews[n] = slotSkew(s, local_time, uptime_secs);
-		radii[n] = RADIUS_BASE_SECS + RADIUS_PER_HOP_SECS * s.hops;
+		int64_t skew = slotSkew(s, local_time, uptime_secs);
+		int32_t r = RADIUS_BASE_SECS + RADIUS_PER_HOP_SECS * s.hops;
+		val[m] = skew - r; typ[m] = 1;  m++;
+		val[m] = skew + r; typ[m] = -1; m++;
 		n++;
 	}
 	c.eligible = (uint8_t)n;
@@ -145,15 +187,8 @@ MeshTimeSync::Consensus MeshTimeSync::computeConsensus(uint32_t local_time,
 
 	/* Marzullo endpoint sweep — interval intersection with the most votes.
 	 * No absolute outlier thresholds against our own clock: clustering does
-	 * the rejection, so an epoch-0 local clock still finds the true cluster. */
-	int64_t val[2 * MESHTIMESYNC_TABLE_SIZE];
-	int8_t typ[2 * MESHTIMESYNC_TABLE_SIZE];  /* +1 = start, -1 = end */
-	int m = 0;
-	for (int i = 0; i < n; i++) {
-		val[m] = skews[i] - radii[i]; typ[m] = 1;  m++;
-		val[m] = skews[i] + radii[i]; typ[m] = -1; m++;
-	}
-	/* Insertion sort by value; starts before ends at equal values so
+	 * the rejection, so an epoch-0 local clock still finds the true cluster.
+	 * Insertion sort by value; starts before ends at equal values so
 	 * touching intervals count as overlapping. */
 	for (int i = 1; i < m; i++) {
 		int64_t v = val[i];
@@ -301,6 +336,50 @@ MeshTimeSync::Verdict MeshTimeSync::tick(uint32_t local_time, uint32_t uptime_se
 	return v;
 }
 
+bool MeshTimeSync::runTick(mesh::RTCClock &rtc)
+{
+	uint32_t up = (uint32_t)(k_uptime_get() / 1000);
+	uint32_t now = rtc.getCurrentTime();
+	Verdict v = tick(now, up);
+	if (v.type != VERDICT_STEP) {
+		if (v.type == VERDICT_ABSTAIN) {
+			LOG_DBG("abstain (%s)", reasonStr(v.reason));
+		}
+		return false;
+	}
+	if (gps_gate_active()) {
+		LOG_INF("step %+ld s wanted, GPS fix is fresh - not applied",
+		        clampl(v.delta));
+		return false;
+	}
+	if (_forward_only && v.delta < 0) {
+		/* Forward-only roles: post timestamps feed client sync_since
+		 * ordering (room server) / peers hold per-sender replay high-water
+		 * marks for our DMs (companion). Report, never apply. */
+		_backward_skips++;
+		LOG_WRN("backward step %+ld s wanted - skipped (forward-only role)",
+		        clampl(v.delta));
+		return false;
+	}
+	int64_t nt = (int64_t)now + v.delta;
+	if (nt <= 0 || nt > (int64_t)UINT32_MAX) {
+		/* Would wrap the uint32 clock — only reachable with a garbage
+		 * bootstrap cluster near the timestamp ceiling. */
+		LOG_WRN("implausible step %+ld s refused", clampl(v.delta));
+		return false;
+	}
+	uint32_t new_time = (uint32_t)nt;
+	rtc.setCurrentTime(new_time);
+	zephcore_rtc_save(new_time);
+	time_sync_report(TIME_SYNC_MESH);
+	noteStepApplied(v.delta, up, v.bootstrap);
+	LOG_WRN("stepped clock %+ld s (%s, votes %u/%u) -> %u",
+	        clampl(v.delta), v.bootstrap ? "bootstrap" : "consensus",
+	        (unsigned)v.consensus.votes_for, (unsigned)v.consensus.votes_against,
+	        (unsigned)new_time);
+	return true;
+}
+
 void MeshTimeSync::noteManualSync(uint32_t uptime_secs)
 {
 	_suppress_uptime = uptime_secs;
@@ -315,15 +394,13 @@ void MeshTimeSync::noteGPSSync(uint32_t uptime_secs)
 	_pedigree = true;
 }
 
-void MeshTimeSync::noteStepApplied(int64_t delta, uint32_t local_time,
-                                   uint32_t uptime_secs, bool bootstrap)
+void MeshTimeSync::noteStepApplied(int64_t delta, uint32_t uptime_secs, bool bootstrap)
 {
 	_last_step_uptime = uptime_secs;
 	_stepped_once = true;
 	_steps++;
 	if (bootstrap) _bootstrap_steps++;
 	_last_step_delta = delta;
-	_last_step_wall = local_time;
 }
 
 bool MeshTimeSync::isSuppressed(uint32_t uptime_secs) const
@@ -351,24 +428,24 @@ const char *MeshTimeSync::reasonStr(Reason r)
 	}
 }
 
-/* Clamp an int64 skew to a printable long (display only). */
-static long clampl(int64_t v)
-{
-	if (v > 2000000000LL) return 2000000000L;
-	if (v < -2000000000LL) return -2000000000L;
-	return (long)v;
-}
-
 int MeshTimeSync::formatStatus(char *out, size_t cap, uint32_t local_time,
                                uint32_t uptime_secs, bool enabled) const
 {
 	Verdict v = evaluateNow(local_time, uptime_secs);
 	const Consensus &c = v.consensus;
 
-	char verdict[40];
+	char verdict[56];
 	if (v.type == VERDICT_STEP) {
-		snprintf(verdict, sizeof(verdict), "step%+ld%s", clampl(v.delta),
-		         v.bootstrap ? " (bootstrap)" : "");
+		/* Annotate steps the shared step policy would refuse, so the
+		 * dry-run never claims a step that will not happen. */
+		const char *note = "";
+		if (gps_gate_active()) {
+			note = " (gps-gated)";
+		} else if (_forward_only && v.delta < 0) {
+			note = " (skipped: forward-only)";
+		}
+		snprintf(verdict, sizeof(verdict), "step%+ld%s%s", clampl(v.delta),
+		         v.bootstrap ? " (bootstrap)" : "", note);
 	} else if (v.type == VERDICT_NONE && v.reason == REASON_IN_BAND) {
 		int64_t mag = c.mid < 0 ? -c.mid : c.mid;
 		snprintf(verdict, sizeof(verdict), "%s",
@@ -391,8 +468,9 @@ int MeshTimeSync::formatStatus(char *out, size_t cap, uint32_t local_time,
 	if (pos < 0 || (size_t)pos >= cap) goto full;
 
 	if (_steps > 0) {
-		pos += snprintf(out + pos, cap - pos, "; steps=%lu last=%+lds",
-		                (unsigned long)_steps, clampl(_last_step_delta));
+		pos += snprintf(out + pos, cap - pos, "; steps=%lu boot=%lu last=%+lds",
+		                (unsigned long)_steps, (unsigned long)_bootstrap_steps,
+		                clampl(_last_step_delta));
 		if (pos < 0 || (size_t)pos >= cap) goto full;
 	}
 	if (_backward_skips > 0) {

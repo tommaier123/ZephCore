@@ -243,7 +243,7 @@ bool RepeaterDataStore::loadPrefs(NodePrefs& prefs) {
         prefs.path_hash_mode = 1;
         prefs.loop_detect = LOOP_DETECT_MODERATE;
         savePrefs(prefs);
-        LOG_INF("loadPrefs: upgraded prefs format (%d -> 296 bytes)", (int)entry.size);
+        LOG_INF("loadPrefs: upgraded prefs format (%d -> 297 bytes)", (int)entry.size);
     }
 
     /* Repeater GPS-interval unification migration: before this firmware the

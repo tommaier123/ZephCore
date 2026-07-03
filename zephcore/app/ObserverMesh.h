@@ -63,8 +63,6 @@ class ObserverMesh : public Dispatcher {
 	 * advert signatures itself before harvesting. */
 	MeshTimeSync _timesync{FIRMWARE_BUILD_EPOCH};
 	void harvestTimeSample(Packet *pkt);
-	void applyTimeSyncStep(const MeshTimeSync::Verdict &v, uint32_t now,
-			       uint32_t uptime_secs);
 
 protected:
 	/* Capture RSSI + raw bytes before packet is parsed */

@@ -139,7 +139,12 @@ void BaseChatMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, 
 {
 	LOG_DBG("onAdvertRecv: timestamp=%u app_data_len=%u", timestamp, (unsigned)app_data_len);
 
-	onAdvertTimeSample(id, timestamp, packet->getPathHashCount());
+	/* Time-sample hook skips share rebroadcasts (transport codes {0,0}) —
+	 * they replay stale stored adverts and would churn the sender's tenure. */
+	if (!(packet->hasTransportCodes() &&
+	      packet->transport_codes[0] == 0 && packet->transport_codes[1] == 0)) {
+		onAdvertTimeSample(id, timestamp, packet->getPathHashCount());
+	}
 
 	AdvertDataParser parser(app_data, app_data_len);
 	if (!(parser.isValid() && parser.hasName())) {
