@@ -58,18 +58,20 @@ LOG_MODULE_REGISTER(ui_pages, CONFIG_ZEPHCORE_BOARD_LOG_LEVEL);
 
 /* Compact RGB565 palette for small color TFTs.  These are used only through
  * mc_display_has_color(); monochrome displays keep the existing CFB path. */
-#define UI_COLOR_HEADER_BG  0x018c  /* deep teal/blue */
-#define UI_COLOR_TITLE      0x5dff  /* readable cyan */
-#define UI_COLOR_LABEL      0x8c71  /* muted blue-gray */
+#define UI_COLOR_BG         MC_COLOR_BLACK
+#define UI_COLOR_HEADER_BG  0x2104  /* dark neutral panel */
+#define UI_COLOR_TITLE      0xffde  /* warm white */
+#define UI_COLOR_LABEL      0x8410  /* muted gray */
 #define UI_COLOR_VALUE      MC_COLOR_WHITE
+#define UI_COLOR_SECONDARY  0xbdf7  /* soft gray-white */
 #define UI_COLOR_OK         0x07e0
-#define UI_COLOR_ACTIVE     0x05ff
+#define UI_COLOR_ACTIVE     UI_COLOR_OK
 #define UI_COLOR_WARN       0xffa0
 #define UI_COLOR_ERROR      MC_COLOR_RED
 #define UI_COLOR_DIM        0x4208
 #define UI_COLOR_DISABLED   MC_COLOR_GRAY
 #define UI_COLOR_TX         MC_COLOR_ORANGE
-#define UI_COLOR_RX         UI_COLOR_ACTIVE
+#define UI_COLOR_RX         UI_COLOR_OK
 
 #define COLOR_FONT_W 6
 #define COLOR_FONT_H 8
@@ -119,6 +121,7 @@ static const enum ui_page active_pages[] = {
 	UI_PAGE_MESSAGES,
 	UI_PAGE_RECENT,
 	UI_PAGE_RADIO,
+	UI_PAGE_TRAFFIC,
 	UI_PAGE_BLUETOOTH,
 	UI_PAGE_ADVERT,
 	UI_PAGE_GPS,
@@ -434,7 +437,7 @@ static void draw_activity_graph(int x, int y, int w, int h)
 
 	sample_activity_graph();
 
-	mc_display_color_fill_rect(x, y, w, h, MC_COLOR_BLACK);
+	mc_display_color_fill_rect(x, y, w, h, UI_COLOR_BG);
 	mc_display_color_fill_rect(x, mid, w, 1, UI_COLOR_DIM);
 
 	for (int i = 0; i < ACTIVITY_GRAPH_SAMPLES; i++) {
@@ -487,17 +490,21 @@ static void render_messages(void)
 		int y = CONTENT_Y;
 		uint16_t ble_color = state.ble_connected ? UI_COLOR_OK : UI_COLOR_WARN;
 		const char *ble = state.ble_connected ? "BLE OK" : "BLE ADV";
-		int graph_h = 16;
-		int graph_y = DISP_H - graph_h - 2;
+		const char *radio = state.lora_tx_active ? "TX" :
+				    (state.lora_in_rx ? "RX" :
+				     (state.lora_radio_ready ? "RDY" : "WAIT"));
+		uint16_t radio_color = state.lora_tx_active ? UI_COLOR_TX :
+				       state.lora_in_rx ? UI_COLOR_RX :
+				       state.lora_radio_ready ? UI_COLOR_OK
+							      : UI_COLOR_WARN;
 
 		draw_badge(0, y, ble, ble_color);
-		draw_badge(DISP_W - color_text_width(state.offgrid_enabled ? "GRID" : "LOCAL") - 4,
-			   y, state.offgrid_enabled ? "GRID" : "LOCAL",
-			   state.offgrid_enabled ? UI_COLOR_ACTIVE : UI_COLOR_DISABLED);
+		draw_badge(DISP_W - color_text_width(radio) - 4, y, radio,
+			   radio_color);
 		y += LINE_H + 2;
 
-		mc_display_color_text(0, y, "MESSAGES", UI_COLOR_LABEL);
-		snprintf(buf, sizeof(buf), "%u", state.msg_count);
+		mc_display_color_text(0, y, "COMPANION", UI_COLOR_LABEL);
+		snprintf(buf, sizeof(buf), "MSG %u", state.msg_count);
 		mc_display_color_text(DISP_W - color_text_width(buf), y, buf,
 				      state.msg_count ? UI_COLOR_WARN : UI_COLOR_VALUE);
 		y += LINE_H;
@@ -505,7 +512,7 @@ static void render_messages(void)
 		if (state.ble_connected) {
 			draw_centered_color(y, "Connected", UI_COLOR_OK);
 		} else {
-			mc_display_color_text(34, y, "Waiting for app", UI_COLOR_WARN);
+			mc_display_color_text(30, y, "Waiting for app", UI_COLOR_WARN);
 		}
 		y += LINE_H;
 
@@ -514,7 +521,6 @@ static void render_messages(void)
 		draw_centered_color(y, buf,
 				    state.offgrid_enabled ? UI_COLOR_ACTIVE
 							  : UI_COLOR_DISABLED);
-		draw_activity_graph(2, graph_y, DISP_W - 4, graph_h);
 		return;
 	}
 
@@ -746,6 +752,64 @@ static void render_radio(void)
 		 (unsigned long)state.lora_packets_tx,
 		 (unsigned long)state.lora_packets_err);
 	mc_display_text(0, y, buf, false);
+}
+
+static void render_traffic(void)
+{
+	char rx_count[6];
+	char tx_count[6];
+	char err_count[6];
+	char buf[32];
+	int y = CONTENT_Y;
+
+	fmt_compact_count(rx_count, sizeof(rx_count), state.lora_packets_rx);
+	fmt_compact_count(tx_count, sizeof(tx_count), state.lora_packets_tx);
+	fmt_compact_count(err_count, sizeof(err_count), state.lora_packets_err);
+
+	if (mc_display_has_color() && DISP_W >= 120 && DISP_H >= 64) {
+		int graph_y;
+		int graph_h;
+		int x;
+
+		mc_display_color_fill_rect(0, y - 1, DISP_W, COLOR_FONT_H + 2,
+					   UI_COLOR_HEADER_BG);
+		mc_display_color_text(2, y, "TRAFFIC", UI_COLOR_TITLE);
+		if (state.lora_packets_err > 0) {
+			snprintf(buf, sizeof(buf), "E %s", err_count);
+			mc_display_color_text(DISP_W - color_text_width(buf), y, buf,
+					      UI_COLOR_ERROR);
+		}
+		y += LINE_H;
+
+		x = 0;
+		mc_display_color_text(x, y, "RX ", UI_COLOR_LABEL);
+		x += 3 * COLOR_FONT_W;
+		mc_display_color_text(x, y, rx_count, UI_COLOR_RX);
+		x += color_text_width(rx_count) + 10;
+		mc_display_color_text(x, y, "TX ", UI_COLOR_LABEL);
+		x += 3 * COLOR_FONT_W;
+		mc_display_color_text(x, y, tx_count, UI_COLOR_TX);
+
+		graph_y = y + LINE_H + 2;
+		graph_h = (int)DISP_H - graph_y - 2;
+		if (graph_h < 16) {
+			graph_h = 16;
+		}
+		draw_activity_graph(2, graph_y, DISP_W - 4, graph_h);
+		return;
+	}
+
+	draw_centered(y, "Traffic");
+	y += LINE_H;
+
+	snprintf(buf, sizeof(buf), "RX:%s TX:%s", rx_count, tx_count);
+	mc_display_text(0, y, buf, false);
+	y += LINE_H;
+
+	if (state.lora_packets_err > 0) {
+		snprintf(buf, sizeof(buf), "ERR:%s", err_count);
+		mc_display_text(0, y, buf, false);
+	}
 }
 
 static void render_bluetooth(void)
@@ -1251,6 +1315,7 @@ static const page_render_fn renderers[] = {
 	[UI_PAGE_MESSAGES]  = render_messages,
 	[UI_PAGE_RECENT]    = render_recent,
 	[UI_PAGE_RADIO]     = render_radio,
+	[UI_PAGE_TRAFFIC]   = render_traffic,
 	[UI_PAGE_BLUETOOTH] = render_bluetooth,
 	[UI_PAGE_ADVERT]    = render_advert,
 	[UI_PAGE_GPS]       = render_gps,
