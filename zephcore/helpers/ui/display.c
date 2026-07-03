@@ -55,6 +55,8 @@ static uint16_t disp_height;
 static uint8_t  font_w;
 static uint8_t  font_h;
 static bool     is_epd;       /* true for e-paper displays */
+
+#if MC_DISPLAY_COLOR_PANEL
 static bool     has_color;    /* true when a raw RGB565 TFT is available */
 
 const uint8_t *zephcore_font_6x8_glyph(uint8_t c);
@@ -82,12 +84,9 @@ static struct color_op color_ops[COLOR_MAX_OPS];
 static uint8_t color_op_count;
 static uint16_t color_line[COLOR_MAX_WIDTH];
 
-#if DT_NODE_EXISTS(DT_NODELABEL(tft))
 static const struct device *color_dev =
 	DEVICE_DT_GET_OR_NULL(DT_NODELABEL(tft));
-#else
-static const struct device *color_dev;
-#endif
+#endif /* MC_DISPLAY_COLOR_PANEL */
 
 /* Optional symmetric inset (pixels).  Shrinks reported width/height and
  * offsets all draw primitives so panels with edge artefacts can hide them
@@ -165,6 +164,7 @@ static inline void panel_vdd_enable(void)
 	}
 }
 
+#if MC_DISPLAY_COLOR_PANEL
 static void color_overlay_probe(void)
 {
 	has_color = false;
@@ -299,6 +299,11 @@ static void color_write_text_now(int x, int y, const char *text, uint16_t color)
 	}
 }
 
+static void color_ops_reset(void)
+{
+	color_op_count = 0;
+}
+
 static void color_flush_ops(void)
 {
 	if (!has_color) {
@@ -317,6 +322,22 @@ static void color_flush_ops(void)
 	}
 	color_op_count = 0;
 }
+
+#else /* !MC_DISPLAY_COLOR_PANEL */
+
+static void color_overlay_probe(void)
+{
+}
+
+static void color_ops_reset(void)
+{
+}
+
+static void color_flush_ops(void)
+{
+}
+
+#endif /* MC_DISPLAY_COLOR_PANEL */
 
 /* Auto-off work */
 static struct k_work_delayable auto_off_work;
@@ -583,10 +604,12 @@ bool mc_display_is_epd(void)
 	return is_epd;
 }
 
+#if MC_DISPLAY_COLOR_PANEL
 bool mc_display_has_color(void)
 {
 	return has_color;
 }
+#endif
 
 void mc_display_clear(void)
 {
@@ -594,7 +617,7 @@ void mc_display_clear(void)
 		return;
 	}
 
-	color_op_count = 0;
+	color_ops_reset();
 	if (is_epd) {
 		epd_frame_hash = 2166136261u;
 	}
@@ -624,6 +647,7 @@ void mc_display_text(int x, int y, const char *text, bool invert)
 	}
 }
 
+#if MC_DISPLAY_COLOR_PANEL
 void mc_display_color_text(int x, int y, const char *text, uint16_t color)
 {
 	if (!disp_initialized || !text) {
@@ -634,6 +658,7 @@ void mc_display_color_text(int x, int y, const char *text, uint16_t color)
 		mc_display_text(x, y, text, false);
 	}
 }
+#endif
 
 void mc_display_fill_rect(int x, int y, int w, int h)
 {
@@ -657,6 +682,7 @@ void mc_display_fill_rect(int x, int y, int w, int h)
 	}
 }
 
+#if MC_DISPLAY_COLOR_PANEL
 void mc_display_color_fill_rect(int x, int y, int w, int h, uint16_t color)
 {
 	if (!disp_initialized) {
@@ -667,6 +693,7 @@ void mc_display_color_fill_rect(int x, int y, int w, int h, uint16_t color)
 		mc_display_fill_rect(x, y, w, h);
 	}
 }
+#endif
 
 void mc_display_hline(int x, int y, int w)
 {
