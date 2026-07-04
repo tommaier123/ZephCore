@@ -940,8 +940,10 @@ void ui_set_radio_stats(uint32_t packets_rx, uint32_t packets_tx,
 			uint32_t packets_err)
 {
 	struct ui_state *s = get_state();
+#ifdef CONFIG_ZEPHCORE_UI_DISPLAY
 	bool activity_changed = packets_rx != s->lora_packets_rx ||
 				packets_tx != s->lora_packets_tx;
+#endif
 
 	s->lora_packets_rx = packets_rx;
 	s->lora_packets_tx = packets_tx;
