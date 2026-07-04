@@ -527,6 +527,12 @@ static void render_messages(void)
 		draw_centered_color(y, buf,
 				    state.offgrid_enabled ? UI_COLOR_ACTIVE
 							  : UI_COLOR_DISABLED);
+		y += LINE_H;
+
+		uint32_t up_s = (uint32_t)(k_uptime_get() / 1000);
+		snprintf(buf, sizeof(buf), "Up: %ud %uh %um",
+			 up_s / 86400, (up_s % 86400) / 3600, (up_s % 3600) / 60);
+		draw_centered_color(y, buf, UI_COLOR_LABEL);
 		return;
 	}
 
@@ -559,21 +565,32 @@ static void render_messages(void)
 		draw_centered_color(y, buf,
 				    state.offgrid_enabled ? UI_COLOR_ACTIVE
 							  : UI_COLOR_DISABLED);
+		y += LINE_H;
+
+		uint32_t up_s = (uint32_t)(k_uptime_get() / 1000);
+		snprintf(buf, sizeof(buf), "Up: %ud %uh %um",
+			 up_s / 86400, (up_s % 86400) / 3600, (up_s % 3600) / 60);
+		draw_centered_color(y, buf, UI_COLOR_LABEL);
 		return;
 	}
 
 	snprintf(buf, sizeof(buf), "MSG: %u", state.msg_count);
-	draw_centered(centered_row(0, 3), buf);
+	draw_centered(centered_row(0, 4), buf);
 
 	if (state.ble_connected) {
-		draw_centered(centered_row(1, 3), "< Connected >");
+		draw_centered(centered_row(1, 4), "< Connected >");
 	} else {
-		draw_centered(centered_row(1, 3), "Waiting for app...");
+		draw_centered(centered_row(1, 4), "Waiting for app...");
 	}
 
 	snprintf(buf, sizeof(buf), "Offgrid: %s",
 		 state.offgrid_enabled ? "ON" : "OFF");
-	draw_centered(centered_row(2, 3), buf);
+	draw_centered(centered_row(2, 4), buf);
+
+	uint32_t up_s = (uint32_t)(k_uptime_get() / 1000);
+	snprintf(buf, sizeof(buf), "Up: %ud %uh %um",
+		 up_s / 86400, (up_s % 86400) / 3600, (up_s % 3600) / 60);
+	draw_centered(centered_row(3, 4), buf);
 }
 
 static void render_recent(void)
