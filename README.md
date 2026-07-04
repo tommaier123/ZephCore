@@ -48,7 +48,8 @@ Other benefits:
 | **Heltec V3** | ESP32-S3 | SX1262 | OLED (SSD1306), 8MB flash |
 | **Heltec V4.2** | ESP32-S3 | SX1262 + GC1109 PA | OLED (SSD1306), 16MB flash, 2MB PSRAM |
 | **Heltec V4.3** | ESP32-S3 | SX1262 + KCT8103L PA | OLED (SSD1306), 16MB flash, 2MB PSRAM |
-| **Heltec Wireless Tracker** | ESP32-S3 | SX1262 | ST7735R 160×80 TFT, UC6580 GPS |
+| **Heltec Wireless Tracker V1.1** | ESP32-S3 | SX1262 | ST7735R 160×80 TFT, UC6580 GPS |
+| **Heltec Wireless Tracker V2** | ESP32-S3FN8 | SX1262 + KCT8103L PA/FEM | ST7735R 160x80 TFT, UC6580 GNSS, battery ADC |
 | **LilyGo T-Beam v1.2** | ESP32 (PICO-D4) | SX1262 | AXP2101 PMU, GNSS, USB-UART CLI |
 | **TTGO LoRa32** | ESP32 (PICO-D4) | **SX1276** (loramac-node backend) | SX127x reference board, USB-UART CLI |
 

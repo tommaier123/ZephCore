@@ -23,6 +23,7 @@ enum ui_page {
 	UI_PAGE_MESSAGES = 0,   /* MSG count + connection status */
 	UI_PAGE_RECENT,         /* Recently heard contacts */
 	UI_PAGE_RADIO,          /* LoRa params (freq, SF, BW, CR, power, noise) */
+	UI_PAGE_TRAFFIC,        /* TX/RX packet activity graph */
 	UI_PAGE_BLUETOOTH,      /* BLE toggle */
 	UI_PAGE_ADVERT,         /* Send broadcast advert */
 	UI_PAGE_GPS,            /* GPS status / position */

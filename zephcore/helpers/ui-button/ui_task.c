@@ -925,7 +925,7 @@ void ui_set_radio_stats(uint32_t packets_rx, uint32_t packets_tx,
 
 #ifdef CONFIG_ZEPHCORE_UI_DISPLAY
 	if (ui_initialized && activity_changed && mc_display_has_color() &&
-	    ui_pages_current() == UI_PAGE_MESSAGES) {
+	    ui_pages_current() == UI_PAGE_TRAFFIC) {
 		schedule_render();
 	}
 #endif
