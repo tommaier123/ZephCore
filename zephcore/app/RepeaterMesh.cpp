@@ -635,7 +635,10 @@ uint32_t RepeaterMesh::getDirectRetransmitDelay(const mesh::Packet* packet) {
     return computeAdaptiveDirectDelay(packet);
 }
 
-bool RepeaterMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
+mesh::DispatcherAction RepeaterMesh::onRecvPacket(mesh::Packet* pkt) {
+    // Determine the request packet's region so sendFloodReply() can echo the same
+    // scope. Runs for every packet (not just floods) so recv_pkt_region is cleared
+    // for direct packets instead of inheriting the last flood's region.
     if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
         recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
     } else if (pkt->getRouteType() == ROUTE_TYPE_FLOOD) {
@@ -647,7 +650,7 @@ bool RepeaterMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
     } else {
         recv_pkt_region = nullptr;
     }
-    return false;
+    return Mesh::onRecvPacket(pkt);
 }
 
 void RepeaterMesh::onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) {

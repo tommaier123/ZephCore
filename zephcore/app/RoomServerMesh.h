@@ -148,7 +148,7 @@ protected:
         return _prefs.multi_acks;
     }
 
-    bool filterRecvFloodPacket(mesh::Packet* pkt) override;
+    mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
 
     void onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp, const uint8_t* app_data, size_t app_data_len) override;
     void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
