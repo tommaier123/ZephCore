@@ -18,6 +18,7 @@ nRF_boards=(
     sensecap_solar
     xiao_nrf52840
     lilygo_techo
+    lilygo_timpulse_plus
     promicro_sx1262
     heltec_t114
     heltec_t096
