@@ -43,7 +43,8 @@ SWD flash: `west flash` (requires J-Link, pyocd, or nrfjprog connected).
 | Heltec V3            | `west build -b heltec_wifi_lora32_v3/esp32s3/procpu zephcore` | `west flash` |
 | Heltec V4.2 (GC1109 PA)  | `west build -b heltec_wifi_lora32_v4/esp32s3/procpu zephcore`  | `west flash` |
 | Heltec V4.3 (KCT8103L PA) | `west build -b heltec_wifi_lora32_v43/esp32s3/procpu zephcore` | `west flash` |
-| Heltec Wireless Tracker | `west build -b heltec_wireless_tracker/esp32s3/procpu zephcore` | `west flash` |
+| Heltec Wireless Tracker V1.1 | `west build -b heltec_wireless_tracker/esp32s3/procpu zephcore` | `west flash` |
+| Heltec Wireless Tracker V2 | `west build -b heltec_wireless_tracker_v2/esp32s3/procpu zephcore` | `west flash` |
 | LilyGo T-Beam v1.2     | `west build -b ttgo_tbeam/esp32/procpu zephcore`               | `west flash` |
 
 **Heltec V3 console:** ZephCore routes console/shell to `uart0` on V3. Use the UART serial port for boot logs and CLI.
@@ -52,6 +53,11 @@ SWD flash: `west flash` (requires J-Link, pyocd, or nrfjprog connected).
 unclear, check GPIO2's default pull: the V4.2 GC1109 PA has an internal pull-down
 (GPIO2 reads LOW at boot), while the V4.3 KCT8103L PA has an internal pull-up
 (GPIO2 reads HIGH). Only difference in firmware: TX control pin GPIO46→GPIO5.
+
+**Heltec Wireless Tracker V1.1 vs V2:** use `heltec_wireless_tracker` for the
+upstream Zephyr V1.1 target and `heltec_wireless_tracker_v2` for the ESP32-S3FN8
+V2 board with KCT8103L PA/FEM. The V2 pin map is documented in
+`boards/esp32/heltec_wireless_tracker_v2/README.md`.
 
 **LilyGo T-Beam v1.2:** Classic ESP32 (PICO-D4) board — several caveats apply:
 - Upstream Zephyr DTS models the SX1276 variant; `board.overlay` overrides the radio node to SX1262 on the same SPI3 wiring.

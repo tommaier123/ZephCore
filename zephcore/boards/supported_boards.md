@@ -41,6 +41,7 @@ heltec_wifi_lora32_v3/esp32s3/procpu
 heltec_wifi_lora32_v4/esp32s3/procpu
 heltec_wifi_lora32_v43/esp32s3/procpu
 heltec_wireless_tracker/esp32s3/procpu
+heltec_wireless_tracker_v2/esp32s3/procpu
 ttgo_tbeam/esp32/procpu
 ```
 
@@ -50,6 +51,10 @@ ttgo_tbeam/esp32/procpu
 >
 > **Heltec Wireless Tracker** (`heltec_wireless_tracker/esp32s3/procpu`): V1.1
 > ESP32-S3-FN8 companion with SX1262, ST7735R 160x80 TFT, and UC6580 GPS.
+>
+> **Heltec Wireless Tracker V2** (`heltec_wireless_tracker_v2/esp32s3/procpu`):
+> ESP32-S3FN8 companion with SX1262 + KCT8103L PA/FEM, ST7735R 160x80 TFT,
+> UC6580 GNSS, battery ADC, and USB-C native serial/JTAG.
 >
 > **LilyGo T-Beam** (`ttgo_tbeam/esp32/procpu`): classic ESP32 (PICO-D4) with
 > SX1262, AXP2101 PMU, and GNSS. Use this for the **v1.2 SX1262** variant — the
