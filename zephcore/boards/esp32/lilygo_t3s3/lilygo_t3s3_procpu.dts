@@ -1,0 +1,138 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * LilyGo T3S3 v1.x — ESP32-S3, 8MB flash, 8MB PSRAM
+ *
+ * Hardware:
+ *   MCU:     ESP32-S3 (Xtensa LX7, dual-core @ 240 MHz)
+ *   Flash:   8 MB (QIO)
+ *   PSRAM:   8 MB (OPI octal, R8 variant)
+ *   Radio:   SX1262 on SPI2 (SCK=5, MISO=3, MOSI=6, NSS=7, DIO1=33, BUSY=34, RST=8)
+ *   Display: SSD1306 128x64 OLED on I2C0 (SDA=18, SCL=17, RST=21)
+ *   Battery: ADC on GPIO1 (100K/100K divider)
+ *   Button:  GPIO0
+ *   Console: Native USB Serial/JTAG (shared with USB OTG)
+ *
+ * This DTS defines all fixed hardware. ZephCore integration (partition layout,
+ * input chains, USB OTG) goes in board.overlay.
+ */
+
+/dts-v1/;
+
+#include <espressif/esp32s3/esp32s3_wroom_n8r8.dtsi>
+#include "lilygo_t3s3-pinctrl.dtsi"
+#include <espressif/partitions_0x0_default_8M.dtsi>
+#include <zephyr/dt-bindings/lora/sx126x.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	model = "LilyGo T3S3 v1.x";
+	compatible = "lilygo,t3-s3";
+
+	aliases {
+		uart-0 = &uart0;
+		i2c-0 = &i2c0;
+		lora0 = &lora;
+		sw0 = &user_button;
+		watchdog0 = &wdt0;
+	};
+
+	chosen {
+		zephyr,sram = &sram1;
+		zephyr,console = &usb_serial;
+		zephyr,shell-uart = &usb_serial;
+		zephyr,flash = &flash0;
+		zephyr,code-partition = &slot0_partition;
+		zephyr,bt-hci = &esp32_bt_hci;
+	};
+
+	buttons: buttons {
+		compatible = "gpio-keys";
+		user_button: user_button {
+			gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;
+			label = "User Button";
+			zephyr,code = <INPUT_BTN_0>;
+		};
+	};
+
+	/* Battery ADC — GPIO1 (ADC1 ch0) with 100K/100K divider = 2:1
+	 * Full-scale mV: 3300 * 2 = 6600. ZephCore reads via zephyr,user node. */
+	zephyr,user {
+		io-channels = <&adc1 0>;
+		vbat-mv-multiplier = <6600>;
+	};
+};
+
+&usb_serial {
+	status = "okay";
+};
+
+&adc1 {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-names = "default";
+
+	ssd1306_128x64: display-controller@3c {
+		compatible = "solomon,ssd1306fb";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		prechargep = <0x22>;
+		vcomh = <0x40>;
+		reset-gpios = <&gpio0 21 GPIO_ACTIVE_LOW>;  /* GPIO21 OLED RST */
+	};
+};
+
+/* SX1262 on SPI2 (SCK=GPIO5, MISO=GPIO3, MOSI=GPIO6 — in pinctrl dtsi) */
+&spi2 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	pinctrl-0 = <&spim2_default>;
+	pinctrl-names = "default";
+	cs-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;  /* GPIO7 NSS */
+
+	lora: lora@0 {
+		compatible = "semtech,sx1262";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+
+		/* LoRa control pins */
+		reset-gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;                    /* GPIO8 */
+		busy-gpios  = <&gpio1 2 GPIO_ACTIVE_HIGH>;                   /* GPIO34 */
+		dio1-gpios  = <&gpio1 1 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; /* GPIO33 */
+
+		/* RF switch: DIO2 drives TX/RX enable (no separate RXEN pin on T3S3) */
+		dio2-tx-enable;
+
+		/* TCXO 1.8V via DIO3 */
+		dio3-tcxo-voltage = <SX126X_DIO3_TCXO_1V8>;
+		tcxo-power-startup-delay-ms = <10>;
+
+		/* RX boosted mode for better sensitivity */
+		rx-boosted;
+	};
+};
+
+&gpio0 { status = "okay"; };
+&gpio1 { status = "okay"; };
+&wdt0 { status = "okay"; };
+&trng0 { status = "okay"; };
+
+&esp32_bt_hci {
+	status = "okay";
+};
+
+&wifi {
+	status = "okay";
+};
