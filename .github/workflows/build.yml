@@ -3,6 +3,7 @@ name: build firmware
 on:
   push:
     branches: [ "master" ]
+  workflow_dispatch:
 
 env:
   zephyr_sdk: 1.0.1
